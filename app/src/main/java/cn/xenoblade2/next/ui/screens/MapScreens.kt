@@ -886,14 +886,15 @@ fun MapDetailScreen(
                         val fy = s.fy
                         s.pinned && fx != null && fy != null && MapMath.normalized(m, fx, fy) != null
                     }
-                    .mapIndexed { index, step ->
+                    .map { step ->
                         OverlayPin(
                             key = "step-${step.id}",
                             fx = step.fx ?: 0.0,
                             fy = step.fy ?: 0.0,
                             label = step.title,
                             color = if (step.done) Palette.Done else Palette.Core,
-                            badge = (index + 1).toString(),
+                            // 用步骤本身的序号，别用列表下标——合并显示时要能对上计划里的「第 N 步」。
+                            badge = step.ord.toString(),
                             dim = step.done,
                         )
                     },
@@ -942,16 +943,6 @@ fun MapDetailScreen(
                             if (r.fallback) "直线回退" else "${"%.2f".format(r.detour)}×",
                             color = Palette.TextDim,
                             fontSize = 10.sp,
-                        )
-                    }
-                    val leg = guideLegs.getOrNull(legIndex)
-                    if (showRoute && leg != null) {
-                        GuidanceCard(
-                            leg = leg,
-                            index = legIndex,
-                            total = guideLegs.size,
-                            onPrev = { if (legIndex > 0) legIndex-- },
-                            onNext = { if (legIndex < guideLegs.size - 1) legIndex++ },
                         )
                     }
                 }
@@ -1012,6 +1003,19 @@ fun MapDetailScreen(
                         .clip(RoundedCornerShape(8.dp))
                         .background(Palette.Core)
                         .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+
+        // 逐段导航放到地图下方：放在图上会盖住一大块路线。
+        if (showRoute) {
+            guideLegs.getOrNull(legIndex)?.let { leg ->
+                GuidanceBar(
+                    leg = leg,
+                    index = legIndex,
+                    total = guideLegs.size,
+                    onPrev = { if (legIndex > 0) legIndex-- },
+                    onNext = { if (legIndex < guideLegs.size - 1) legIndex++ },
                 )
             }
         }
@@ -1318,58 +1322,60 @@ private fun PinCard(pin: OverlayPin, modifier: Modifier) {
  * 数据来自 `RouteGuide.legs()`，本质是点位图折线，不是真实路网，
  * 所以文案里只写方位 + 大致距离 + 下一处地标名。
  */
+/** 地图下方的逐段导航条：一行字 + 前后切换，不挡地图。 */
 @Composable
-private fun GuidanceCard(
+private fun GuidanceBar(
     leg: RouteLeg,
     index: Int,
     total: Int,
     onPrev: () -> Unit,
     onNext: () -> Unit,
 ) {
-    Column(
+    Row(
         Modifier
-            .width(238.dp)
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xF2141B25))
-            .border(1.dp, Color(0xFF2A3646), RoundedCornerShape(10.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .background(Palette.Surface)
+            .border(1.dp, Palette.CardBorder, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("逐段导航", color = Color(0xFFFFC24B), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.width(6.dp))
-            Text("${index + 1}/$total", color = Palette.TextDim, fontSize = 10.sp)
-            Spacer(Modifier.weight(1f))
-            Box(
-                Modifier
-                    .clickable(enabled = index > 0, onClick = onPrev)
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-            ) {
-                Text("‹", color = if (index > 0) Palette.Text else Color(0xFF3A4553), fontSize = 16.sp)
-            }
-            Box(
-                Modifier
-                    .clickable(enabled = index < total - 1, onClick = onNext)
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-            ) {
-                Text("›", color = if (index < total - 1) Palette.Text else Color(0xFF3A4553), fontSize = 16.sp)
-            }
-        }
-        Spacer(Modifier.height(4.dp))
         Text(
-            "${leg.heading} · ${"%.0f".format(leg.distance)}",
-            color = Palette.Text,
-            fontSize = 15.sp,
+            "${index + 1}/$total",
+            color = Palette.Core,
+            fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
         )
-        Spacer(Modifier.height(2.dp))
-        Text(
-            if (leg.landmark) "前往 ${leg.toName}" else "到达终点 ${leg.toName}",
-            color = Palette.TextDim,
-            fontSize = 11.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(3.dp))
-        Text("点位图估算，非真实路网", color = Color(0xFF5C6B7C), fontSize = 9.sp)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "${leg.heading} · ${"%.0f".format(leg.distance)}",
+                color = Palette.Text,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                if (leg.landmark) "前往 ${leg.toName}" else "到达终点 ${leg.toName}",
+                color = Palette.TextDim,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(
+            Modifier
+                .clickable(enabled = index > 0, onClick = onPrev)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        ) {
+            Text("‹", color = if (index > 0) Palette.Text else Palette.TextDim.copy(alpha = 0.35f), fontSize = 16.sp)
+        }
+        Box(
+            Modifier
+                .clickable(enabled = index < total - 1, onClick = onNext)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        ) {
+            Text("›", color = if (index < total - 1) Palette.Text else Palette.TextDim.copy(alpha = 0.35f), fontSize = 16.sp)
+        }
     }
 }

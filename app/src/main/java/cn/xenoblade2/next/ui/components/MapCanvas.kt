@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
@@ -785,25 +786,86 @@ fun MapCanvas(
             }
 
             // 叠加点位（计划步骤 / 搜索结果）
+            //
+            // 同一个地标上常常挂着好几个步骤（第 1、2、5、17 步都在伊谢巴港），
+            // 直接叠画只会看到最上面那个数字。这里把屏幕距离很近的点合并成一个胶囊，
+            // 把步骤号并排写出来。
+            val groups = ArrayList<Pair<Offset, MutableList<OverlayPin>>>()
             for (pin in overlay) {
                 val p = placeStrict(v, pin.fx, pin.fy) ?: continue
                 if (p.x < -40 || p.y < -40 || p.x > size.width + 40 || p.y > size.height + 40) continue
-                val selected = pin.key == selectedKey
-                val r = (if (selected) 11 else 9).dp.toPx()
-                drawCircle(color = Color.White.copy(alpha = 0.9f), radius = r + 2.6f, center = p)
-                drawCircle(color = Color.Black.copy(alpha = 0.85f), radius = r + 1.1f, center = p)
-                drawCircle(color = if (pin.dim) pin.color.copy(alpha = 0.4f) else pin.color, radius = r, center = p)
-                if (selected) {
-                    drawCircle(color = Color.White, radius = r + 4.5f, center = p, style = Stroke(width = 2.4f))
-                }
-                pin.badge?.let { badge ->
+                val near = groups.firstOrNull { (it.first - p).getDistance() < 14f }
+                if (near != null) near.second.add(pin) else groups.add(p to mutableListOf(pin))
+            }
+            for (g in groups) {
+                val p = g.first
+                val pins = g.second
+                val selected = pins.any { it.key == selectedKey }
+                // 整组都完成了就整体变淡
+                val active = pins.any { !it.dim }
+                val fill = (if (active) pins.first().color else pins.first().color.copy(alpha = 0.4f))
+                val indexes = pins.mapNotNull { it.badge }
+                if (indexes.size <= 1) {
+                    val r = (if (selected) 11 else 9).dp.toPx()
+                    drawCircle(color = Color.White.copy(alpha = 0.9f), radius = r + 2.6f, center = p)
+                    drawCircle(color = Color.Black.copy(alpha = 0.85f), radius = r + 1.1f, center = p)
+                    drawCircle(color = fill, radius = r, center = p)
+                    if (selected) {
+                        drawCircle(color = Color.White, radius = r + 4.5f, center = p, style = Stroke(width = 2.4f))
+                    }
+                    indexes.firstOrNull()?.let { badge ->
+                        val layout = measurer.measure(
+                            badge,
+                            TextStyle(color = Color(0xFF0B0F17), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                        )
+                        drawText(
+                            layout,
+                            topLeft = p - Offset(layout.size.width / 2f, layout.size.height / 2f),
+                        )
+                    }
+                } else {
+                    val badge = if (indexes.size > 4) {
+                        indexes.take(3).joinToString("·") + " +${indexes.size - 3}"
+                    } else {
+                        indexes.joinToString("·")
+                    }
                     val layout = measurer.measure(
                         badge,
-                        TextStyle(color = Color(0xFF0B0F17), fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                        TextStyle(color = Color(0xFF0B0F17), fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                    )
+                    val h = 18.dp.toPx()
+                    val w = layout.size.width + 12.dp.toPx()
+                    val tl = Offset(p.x - w / 2f, p.y - h / 2f)
+                    if (selected) {
+                        drawRoundRect(
+                            color = Color.White,
+                            topLeft = tl - Offset(3.dp.toPx(), 3.dp.toPx()),
+                            size = Size(w + 6.dp.toPx(), h + 6.dp.toPx()),
+                            cornerRadius = CornerRadius((h + 6.dp.toPx()) / 2f),
+                        )
+                    }
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.92f),
+                        topLeft = tl,
+                        size = Size(w, h),
+                        cornerRadius = CornerRadius(h / 2f),
+                    )
+                    drawRoundRect(
+                        color = Color.Black.copy(alpha = 0.85f),
+                        topLeft = tl,
+                        size = Size(w, h),
+                        cornerRadius = CornerRadius(h / 2f),
+                        style = Stroke(width = 1.2f),
+                    )
+                    drawRoundRect(
+                        color = fill,
+                        topLeft = tl + Offset(1.5f, 1.5f),
+                        size = Size(w - 3f, h - 3f),
+                        cornerRadius = CornerRadius((h - 3f) / 2f),
                     )
                     drawText(
                         layout,
-                        topLeft = p - Offset(layout.size.width / 2f, layout.size.height / 2f),
+                        topLeft = Offset(p.x - layout.size.width / 2f, p.y - layout.size.height / 2f),
                     )
                 }
             }
