@@ -3,7 +3,7 @@
   "name": "affinity-clarity",
   "title": "开环任务步骤明确化",
   "description": "异刃开环节点需求、获取途径、触发条件明确化并可从任务跳转",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
