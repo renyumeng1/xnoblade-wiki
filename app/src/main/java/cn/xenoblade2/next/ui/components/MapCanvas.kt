@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -21,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -33,6 +35,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -82,6 +85,73 @@ class MapViewState {
 
 @Composable
 fun rememberMapViewState(): MapViewState = remember { MapViewState() }
+
+/** 原版交互地图用的类别位图（assets/maps 下的 -marker 位图，从 1.2.2 原包提取）。 */
+object MapMarkerArt {
+    private const val RARE = "maps/rare-enemy-marker.webp"
+    private const val QUEST = "maps/quest-marker.webp"
+    private const val LOCATION = "maps/location-marker.webp"
+    private const val LANDMARK = "maps/landmark-marker.png"
+    private const val SECRET = "maps/secret-area-marker.png"
+    private const val HEART = "maps/heart-to-heart-marker.webp"
+    private const val SHOP = "maps/shop-marker.webp"
+    private const val COLLECT = "maps/collection-point-marker.webp"
+    private const val TREASURE = "maps/treasure-chest-marker.png"
+    private const val ROUTE = "maps/route-access-marker.webp"
+
+    private val ALL = listOf(RARE, QUEST, LOCATION, LANDMARK, SECRET, HEART, SHOP, COLLECT, TREASURE, ROUTE)
+    private val cache = LruCache<String, ImageBitmap>(ALL.size)
+    private var loaded = false
+
+    fun load(context: Context): Map<String, ImageBitmap> {
+        if (loaded) return ALL.mapNotNull { p -> cache.get(p)?.let { p to it } }.toMap()
+        val out = HashMap<String, ImageBitmap>()
+        for (p in ALL) {
+            runCatching {
+                context.assets.open(p).use { s -> BitmapFactory.decodeStream(s)?.asImageBitmap() }
+            }.getOrNull()?.let { bmp ->
+                cache.put(p, bmp)
+                out[p] = bmp
+            }
+        }
+        loaded = true
+        return out
+    }
+
+    /** 只有类型、没有完整 Marker 时用（筛选条 / 详情卡）。 */
+    fun pathOfType(type: String): String? = when (type) {
+        "TombstonePoint" -> RARE
+        "Quest" -> QUEST
+        "Location" -> LOCATION
+        "Landmark" -> LANDMARK
+        "Secret Area" -> SECRET
+        "HeartToHeart" -> HEART
+        "Shop" -> SHOP
+        "CollectionPoint" -> COLLECT
+        "TreasurePoint" -> TREASURE
+        "RouteAccessPoint" -> ROUTE
+        else -> null
+    }
+
+    /** marker → 位图路径；原版只给这 10 类画图，其余仍走绘制的 pin 兜底。 */
+    fun pathOf(m: Marker): String? = when {
+        m.targetType == "Location" && m.targetCategory == "Secret Area" -> SECRET
+        m.targetType == "Location" && m.targetCategory == "Landmark" -> LANDMARK
+        m.targetType == "Location" -> LOCATION
+        m.targetType == "TombstonePoint" -> RARE
+        m.targetType == "Quest" -> QUEST
+        m.targetType == "HeartToHeart" -> HEART
+        m.targetType == "Shop" -> SHOP
+        m.targetType == "CollectionPoint" -> COLLECT
+        m.targetType == "TreasurePoint" -> TREASURE
+        m.targetType == "RouteAccessPoint" -> ROUTE
+        else -> null
+    }
+
+    /** 原版尺寸：普通 29dp，秘境 31dp。 */
+    fun heightDp(m: Marker): Float =
+        if (m.targetType == "Location" && m.targetCategory == "Secret Area") 31f else 29f
+}
 
 object MapImages {
     /** 原图最大 4014x3893，全尺寸解码约 59 MB/张；手机上没必要，降到长边 2560 以内。 */
@@ -175,6 +245,8 @@ fun markerTypeLabel(type: String): String = when (type) {
  */
 enum class MarkerGlyph {
     Landmark, Quest, Enemy, Collect, Treasure, Salvage, Heart, Shop, Inn, Gate, Climb, Jump, Npc, Dot,
+    /** 以下三个只给筛选条 / 详情卡用，地图 pin 有专属位图。 */
+    Secret, Route, Favorite,
 }
 
 fun markerGlyph(type: String): MarkerGlyph = when (type) {
@@ -192,6 +264,32 @@ fun markerGlyph(type: String): MarkerGlyph = when (type) {
     "JumpPoint" -> MarkerGlyph.Jump
     "Npc" -> MarkerGlyph.Npc
     else -> MarkerGlyph.Dot
+}
+
+/**
+ * 地图点位徽标。
+ *
+ * 形状参考 xenoblade2.cn 的地图（Leaflet 自定义 22×32 水滴 pin）：
+ * 统一的水滴轮廓 + 白色描边，内部用「类别专属图形」区分，颜色只做辅助。
+ * 这样在灰底地图上既醒目，也不会只靠颜色辨别。
+ */
+private fun DrawScope.drawMarkerPin(type: String, tip: Offset, r: Float) {
+    val color = markerColor(type)
+    val w = r
+    val h = r * 2.9f
+    val top = tip.y - h
+    val cy = top + w
+    val path = Path().apply {
+        moveTo(tip.x - w, cy)
+        arcTo(Rect(tip.x - w, top, tip.x + w, cy + w), 180f, 180f, false)
+        lineTo(tip.x, tip.y)
+        close()
+    }
+    // 外描边：先用半透明黑压出轮廓，再加一圈白边，深浅地图都撑得住
+    drawPath(path, Color.Black.copy(alpha = 0.38f), style = Stroke(width = 3.4f))
+    drawPath(path, color)
+    drawPath(path, Color.White.copy(alpha = 0.96f), style = Stroke(width = 1.9f))
+    drawTypeGlyph(markerGlyph(type), Offset(tip.x, cy), w * 0.74f, Color.White)
 }
 
 /** 画一个「深底 + 类别色描边 + 类别色图形」的点位徽标，灰底/黑底上都看得清。 */
@@ -334,9 +432,15 @@ private fun DrawScope.drawTypeGlyph(glyph: MarkerGlyph, c: Offset, r: Float, fg:
                 size = Size(s * 1.44f, s * 1.15f),
             )
         }
-        MarkerGlyph.Dot -> drawCircle(fg, radius = r * 0.32f, center = c)
+        MarkerGlyph.Secret, MarkerGlyph.Route, MarkerGlyph.Favorite,
+        MarkerGlyph.Dot,
+        -> drawCircle(fg, radius = r * 0.32f, center = c)
     }
 }
+
+/** 供筛选条 / 列表复用同一套类别图形。 */
+internal fun DrawScope.drawGlyphByEnum(glyph: MarkerGlyph, c: Offset, r: Float, fg: Color) =
+    drawTypeGlyph(glyph, c, r, fg)
 
 /** 图层筛选条 / 详情卡里用的迷你图标。 */
 @Composable
@@ -345,8 +449,19 @@ fun MarkerGlyphBadge(
     box: androidx.compose.ui.unit.Dp = 16.dp,
     modifier: Modifier = Modifier,
 ) {
+    val art = rememberAssetBitmap(WikiIcons.mapPath(type) ?: MapMarkerArt.pathOfType(type))
+    if (art != null) {
+        Image(
+            bitmap = art,
+            contentDescription = null,
+            modifier = modifier.size(box),
+            contentScale = ContentScale.Fit,
+        )
+        return
+    }
     Canvas(modifier.size(box)) {
-        drawMarkerBadge(type, center, size.minDimension / 2f * 0.94f)
+        val r = size.minDimension * 0.30f
+        drawMarkerPin(type, Offset(size.width / 2f, size.height - r * 0.16f), r)
     }
 }
 
@@ -403,6 +518,7 @@ fun MapCanvas(
     map: MapInfo,
     viewState: MapViewState,
     markers: List<Marker>,
+    /** 已开启的筛选 key，见 [markerFilterKey]（Location 会拆成地点/地标/秘境）。 */
     visibleTypes: Set<String>,
     overlay: List<OverlayPin>,
     selectedKey: String?,
@@ -428,6 +544,24 @@ fun MapCanvas(
     val mask by produceState<SnapMask?>(null, map.id) {
         value = withContext(Dispatchers.IO) { MapImages.maskOf(context, map.imagePath) }
     }
+    // 游戏内的地图标记图标（wiki 资源）。有图标的类型直接画图，其余继续自绘水滴。
+    val enemyIcon = rememberAssetBitmap(WikiIcons.mapPath("EnemySpawnPoint"))
+    val collectIcon = rememberAssetBitmap(WikiIcons.mapPath("CollectionPoint"))
+    val treasureIcon = rememberAssetBitmap(WikiIcons.mapPath("TreasurePoint"))
+    val salvageIcon = rememberAssetBitmap(WikiIcons.mapPath("SalvagePoint"))
+    val markerArt by produceState<Map<String, ImageBitmap>>(emptyMap(), map.id) {
+        value = withContext(Dispatchers.IO) { MapMarkerArt.load(context) }
+    }
+    val wikiMarkerIcon: (String) -> ImageBitmap? = { type ->
+        when (type) {
+            "EnemySpawnPoint", "TombstonePoint" -> enemyIcon
+            "CollectionPoint" -> collectIcon
+            "TreasurePoint" -> treasureIcon
+            "SalvagePoint" -> salvageIcon
+            else -> null
+        }
+    }
+    // 原版 marker 位图（29dp），一次性解码后全程复用
     /** frontier 坐标 → 屏幕坐标，途中做一次「吸附到最近可走区域」。 */
     val place: (Viewport, Double, Double) -> Offset? = { vp, fx, fy ->
         MapMath.normalized(map, fx, fy)?.let { n ->
@@ -504,7 +638,7 @@ fun MapCanvas(
                             }
                         }
                         for (m in markers) {
-                            if (!visibleTypes.contains(m.targetType)) continue
+                            if (!visibleTypes.contains(markerFilterKey(m))) continue
                             val p = placeStrict(v, m.frontierX, m.frontierY) ?: continue
                             val d = (p - tap).getDistance()
                             if (d < bestDist) {
@@ -604,21 +738,46 @@ fun MapCanvas(
                 }
             }
 
-            // 地图自带点位：形状区分类型，尺寸跟手（默认 5dp，放大后最多 1.35 倍）
-            // 之前是 3.2px 的小圆点，在灰底地图上基本看不见。
-            val baseRadius = 5.dp.toPx() * (1f + (scale - 1f) * 0.08f).coerceIn(1f, 1.35f)
+            // 地图自带点位：优先 wiki 图标；wiki 没收录的类型用同款游戏内标记。
+            // 只有拿不到任何位图的冷门类型才回退到自绘水滴。
+            val markerScale = (1f + (scale - 1f) * 0.10f).coerceIn(1f, 1.4f)
+            val baseRadius = 7.5.dp.toPx() * markerScale
             for (m in markers) {
-                if (!visibleTypes.contains(m.targetType)) continue
+                if (!visibleTypes.contains(markerFilterKey(m))) continue
                 val p = placeStrict(v, m.frontierX, m.frontierY) ?: continue
-                if (p.x < -30 || p.y < -30 || p.x > size.width + 30 || p.y > size.height + 30) continue
-                drawMarkerBadge(m.targetType, p, baseRadius)
+                if (p.x < -40 || p.y < -70 || p.x > size.width + 40 || p.y > size.height + 40) continue
+                val wikiIcon = wikiMarkerIcon(m.targetType)
+                val artPath = if (wikiIcon == null) MapMarkerArt.pathOf(m) else null
+                val icon = wikiIcon ?: artPath?.let { markerArt[it] }
+                val iconH: Float
+                if (icon != null) {
+                    // 所有来源的图标统一按高度缩放，避免 32×32 的旋涡比 22×32 的铲子大一圈。
+                    iconH = 27.dp.toPx() * markerScale
+                    val iw = iconH * icon.width / icon.height
+                    drawImage(
+                        image = icon,
+                        dstOffset = IntOffset(
+                            (p.x - iw / 2f).roundToInt(),
+                            (p.y - iconH).roundToInt(),
+                        ),
+                        dstSize = IntSize(iw.roundToInt(), iconH.roundToInt()),
+                    )
+                } else {
+                    drawMarkerPin(m.targetType, p, baseRadius)
+                    iconH = baseRadius * 2.9f
+                }
+                if (m.hasAppearanceCondition) {
+                    val dot = Offset(p.x + baseRadius * 0.9f, p.y - iconH + 2.dp.toPx())
+                    drawCircle(Color(0xFFE53935), radius = 3.dp.toPx(), center = dot)
+                    drawCircle(Color.White, radius = 3.dp.toPx(), center = dot, style = Stroke(width = 1.dp.toPx()))
+                }
             }
 
             // 地标文字：放大到 1.6x 后才显示，避免糊成一片
             if (scale >= 1.6f) {
                 for (m in markers) {
                     if (m.targetType != "Location" && m.targetType != "Quest") continue
-                    if (!visibleTypes.contains(m.targetType)) continue
+                    if (!visibleTypes.contains(markerFilterKey(m))) continue
                     val p = placeStrict(v, m.frontierX, m.frontierY) ?: continue
                     if (p.x < 0 || p.y < 0 || p.x > size.width || p.y > size.height) continue
                     drawLabel(measurer, m.targetName, p + Offset(8f, -6f), markerColor(m.targetType))

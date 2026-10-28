@@ -33,7 +33,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,9 +45,11 @@ import cn.xenoblade2.next.plan.PlanStore
 import cn.xenoblade2.next.plan.RouteGuide
 import cn.xenoblade2.next.plan.StepHop
 import cn.xenoblade2.next.ui.components.ActionRow
+import cn.xenoblade2.next.ui.components.cleanStepDetail
 import cn.xenoblade2.next.ui.components.EmptyHint
 import cn.xenoblade2.next.ui.components.ScreenHeader
 import cn.xenoblade2.next.ui.components.Tag
+import cn.xenoblade2.next.ui.components.WikiShotPanel
 import cn.xenoblade2.next.ui.theme.Palette
 import kotlinx.coroutines.launch
 
@@ -122,7 +123,7 @@ fun PlanListScreen(onOpen: (Long) -> Unit, onCreateQuestPlan: () -> Unit) {
                                 Icon(
                                     Icons.Filled.DeleteOutline,
                                     contentDescription = "删除",
-                                    tint = Color(0xFF5C6B7C),
+                                    tint = Palette.TextDim,
                                     modifier = Modifier.size(16.dp),
                                 )
                             }
@@ -133,7 +134,7 @@ fun PlanListScreen(onOpen: (Long) -> Unit, onCreateQuestPlan: () -> Unit) {
                                 progress = { plan.progress.coerceIn(0f, 1f) },
                                 modifier = Modifier.weight(1f).height(4.dp).clip(RoundedCornerShape(2.dp)),
                                 color = Palette.Core,
-                                trackColor = Color(0xFF23303F),
+                                trackColor = Palette.CardBorder,
                             )
                             Spacer(Modifier.width(8.dp))
                             Text("${plan.doneCount}/${plan.stepCount}", color = Palette.TextDim, fontSize = 11.sp)
@@ -263,17 +264,29 @@ private fun StepRow(
             .padding(10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Box(
+        // 左侧时间轴：序号 + 细竖线。不再用圆圈，避免和地图点位抢视觉。
+        Column(
             Modifier
-                .size(22.dp)
-                .clip(CircleShape)
-                .background(if (step.done) Palette.Done.copy(alpha = 0.25f) else Palette.SurfaceHigh)
-                .border(1.dp, if (step.done) Palette.Done else Color(0xFF2E3A4A), CircleShape)
-                .clickable(onClick = onToggle),
-            contentAlignment = Alignment.Center,
+                .width(26.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onToggle)
+                .padding(vertical = 2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (step.done) Text("✓", color = Palette.Done, fontSize = 12.sp)
-            else Text(step.ord.toString(), color = Palette.TextDim, fontSize = 10.sp)
+            Text(
+                if (step.done) "✓" else "%02d".format(step.ord),
+                color = if (step.done) Palette.Done else Palette.TextDim,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(4.dp))
+            Box(
+                Modifier
+                    .width(2.dp)
+                    .height(20.dp)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(if (step.done) Palette.Done.copy(alpha = 0.45f) else Palette.CardBorder),
+            )
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
@@ -286,7 +299,11 @@ private fun StepRow(
             )
             if (step.detail.isNotBlank()) {
                 Spacer(Modifier.height(3.dp))
-                Text(step.detail, color = Color(0xFF7C8B9C), fontSize = 11.sp, lineHeight = 16.sp)
+                Text(cleanStepDetail(step.detail), color = Palette.TextDim, fontSize = 11.sp, lineHeight = 16.sp)
+            }
+            if (!step.shot.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                WikiShotPanel(step.shot)
             }
             hop?.let {
                 Spacer(Modifier.height(3.dp))
@@ -301,13 +318,13 @@ private fun StepRow(
                         it.via?.let { v -> append(" · 经 $v") }
                         if (it.legs > 1) append(" · ${it.legs} 段")
                     },
-                    color = if (step.done) Color(0xFF5C6B7C) else Color(0xFF8FA3B8),
+                    color = if (step.done) Palette.TextDim else Palette.Core.copy(alpha = 0.78f),
                     fontSize = 11.sp,
                     lineHeight = 16.sp,
                 )
             }
             if (step.mapId != null) {
-                val area = WikiRepo.map(step.mapId)?.area ?: step.mapId
+                val area = WikiRepo.map(step.mapId)?.area?.takeIf { it.isNotBlank() } ?: "地图"
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
@@ -326,19 +343,19 @@ private fun StepRow(
                     Spacer(Modifier.width(6.dp))
                     Text(
                         "↑",
-                        color = Color(0xFF5C6B7C),
+                        color = Palette.TextDim,
                         fontSize = 12.sp,
                         modifier = Modifier.clickable { onMove(true) }.padding(horizontal = 4.dp),
                     )
                     Text(
                         "↓",
-                        color = Color(0xFF5C6B7C),
+                        color = Palette.TextDim,
                         fontSize = 12.sp,
                         modifier = Modifier.clickable { onMove(false) }.padding(horizontal = 4.dp),
                     )
                     Text(
                         "删除",
-                        color = Color(0xFF5C6B7C),
+                        color = Palette.TextDim,
                         fontSize = 11.sp,
                         modifier = Modifier.clickable(onClick = onDelete).padding(horizontal = 4.dp),
                     )
@@ -348,25 +365,25 @@ private fun StepRow(
                 Row {
                     Text(
                         "未定位",
-                        color = Color(0xFF5C6B7C),
+                        color = Palette.TextDim,
                         fontSize = 11.sp,
                         modifier = Modifier.padding(end = 8.dp),
                     )
                     Text(
                         "↑",
-                        color = Color(0xFF5C6B7C),
+                        color = Palette.TextDim,
                         fontSize = 12.sp,
                         modifier = Modifier.clickable { onMove(true) }.padding(horizontal = 4.dp),
                     )
                     Text(
                         "↓",
-                        color = Color(0xFF5C6B7C),
+                        color = Palette.TextDim,
                         fontSize = 12.sp,
                         modifier = Modifier.clickable { onMove(false) }.padding(horizontal = 4.dp),
                     )
                     Text(
                         "删除",
-                        color = Color(0xFF5C6B7C),
+                        color = Palette.TextDim,
                         fontSize = 11.sp,
                         modifier = Modifier.clickable(onClick = onDelete).padding(horizontal = 4.dp),
                     )

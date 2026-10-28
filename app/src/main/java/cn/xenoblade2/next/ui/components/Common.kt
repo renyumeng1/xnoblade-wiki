@@ -46,7 +46,7 @@ fun SectionCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(Palette.Surface)
-            .border(1.dp, Color(0xFF23303F), RoundedCornerShape(14.dp))
+            .border(1.dp, Palette.CardBorder, RoundedCornerShape(14.dp))
             .padding(14.dp),
     ) {
         if (title != null) {
@@ -127,7 +127,7 @@ fun ChipRow(
                     .background(if (active) Palette.Core.copy(alpha = 0.2f) else Palette.SurfaceHigh)
                     .border(
                         1.dp,
-                        if (active) Palette.Core else Color(0xFF26313F),
+                        if (active) Palette.Core else Palette.CardBorder,
                         RoundedCornerShape(20.dp),
                     )
                     .clickable { onSelect(option) }
@@ -157,4 +157,40 @@ fun ActionRow(text: String, color: Color = Palette.Core, onClick: () -> Unit) {
     ) {
         Text(text, color = color, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
+}
+
+/**
+ * 步骤说明按行去重。
+ *
+ * 老计划里常见两种重复：wiki 正文和定位备注各写了一遍同样的「地点：X」；
+ * 备注已经写明「已按你的选择固定在 X」时后面又跟一行「地图：X」。
+ * 显示层统一清一遍，避免用户看到两行一样的信息。
+ */
+fun cleanStepDetail(text: String): String {
+    if (text.isBlank()) return text
+    val lines = LinkedHashSet(
+        text.lines()
+            .flatMap { line ->
+                // 「地点：A；角色：B」这种一行塞两条信息的，拆开后再去重，
+                // 否则和后面单独一行的「地点：A」看起来完全重复。
+                val parts = line.split('；').map { it.trim() }.filter { it.isNotEmpty() }
+                if (parts.size > 1 && parts.first().contains('：')) parts else listOf(line.trim())
+            }
+            // 老版本生成计划时把候选打分一起写进了 detail，这些行对玩家没意义。
+            .filterNot { it.matches(Regex("""^\d+\.\s.*""")) }
+            .map {
+                it.replace(Regex("""\s*/\s*ma\d[\w]*"""), "")
+                    .replace("分数不够明确，先不自动钉点：", "暂未自动钉点")
+                    .trimEnd('：')
+            }
+            .filter { it.isNotEmpty() },
+    )
+    val redundantMaps = lines
+        .filter { it.startsWith("地图：") }
+        .map { it.removePrefix("地图：") }
+        .filter { label -> lines.any { other -> other != "地图：$label" && other.contains(label) } }
+        .toSet()
+    return lines
+        .filterNot { it.startsWith("地图：") && it.removePrefix("地图：") in redundantMaps }
+        .joinToString("\n")
 }

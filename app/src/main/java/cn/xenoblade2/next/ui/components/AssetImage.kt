@@ -38,12 +38,13 @@ fun AssetImage(
     path: String?,
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
+    contentScale: ContentScale = ContentScale.Crop,
 ) {
     val bmp = rememberAssetBitmap(path) ?: return
     Image(
         bitmap = bmp,
         contentDescription = contentDescription,
         modifier = modifier,
-        contentScale = ContentScale.Crop,
+        contentScale = contentScale,
     )
 }

@@ -1,8 +1,11 @@
 package cn.xenoblade2.next.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,7 +33,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.OpenInFull
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
@@ -39,15 +50,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -56,7 +70,9 @@ import androidx.compose.ui.unit.sp
 import cn.xenoblade2.next.data.MapInfo
 import cn.xenoblade2.next.data.MapMath
 import cn.xenoblade2.next.data.Marker
+import cn.xenoblade2.next.data.Prefs
 import cn.xenoblade2.next.data.WikiRepo
+import cn.xenoblade2.next.data.WikiShots
 import cn.xenoblade2.next.plan.NewStep
 import cn.xenoblade2.next.plan.PlanStep
 import cn.xenoblade2.next.plan.PlanStore
@@ -64,7 +80,15 @@ import cn.xenoblade2.next.plan.RouteGraph
 import cn.xenoblade2.next.plan.RouteGuide
 import cn.xenoblade2.next.plan.RouteLeg
 import cn.xenoblade2.next.plan.RouteResult
+import cn.xenoblade2.next.ui.components.AssetImage
 import cn.xenoblade2.next.ui.components.EmptyHint
+import cn.xenoblade2.next.ui.components.MARKER_FILTER_DEFAULTS
+import cn.xenoblade2.next.ui.components.FAVORITE_FILTER_KEY
+import cn.xenoblade2.next.ui.components.MARKER_FILTERS
+import cn.xenoblade2.next.ui.components.MarkerFilterGlyph
+import cn.xenoblade2.next.ui.components.WikiShotPanel
+import cn.xenoblade2.next.ui.components.markerFilterColor
+import cn.xenoblade2.next.ui.components.markerFilterKey
 import cn.xenoblade2.next.ui.components.LoadingBox
 import cn.xenoblade2.next.ui.components.MarkerGlyphBadge
 import cn.xenoblade2.next.ui.components.OverlayPin
@@ -79,59 +103,468 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun MapListScreen(onOpen: (String) -> Unit) {
-    var maps by remember { mutableStateOf<List<MapInfo>>(emptyList()) }
+    var regions by remember { mutableStateOf<List<Pair<String, List<MapInfo>>>>(emptyList()) }
+    var region by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        maps = WikiRepo.io { WikiRepo.maps().filter { it.markerCount > 0 } }
+        regions = WikiRepo.io { WikiRepo.interactiveRegions() }
     }
 
-    Column(Modifier.fillMaxWidth()) {
-        ScreenHeader(title = "交互地图", subtitle = "${maps.size} 张 · 地标 / 敌人 / 采集 / 宝箱")
-        if (maps.isEmpty()) {
-            LoadingBox(Modifier.height(200.dp))
-        } else {
-            val grouped = maps.groupBy { it.region }
-            LazyColumn(
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                grouped.forEach { (region, list) ->
-                    item(key = "h-$region") {
+    // 两级：地区 → 该地区的地图。同一地区的层在地区页顶部用标签切换。
+    BackHandler(enabled = region != null) { region = null }
+
+    val r = region
+    when {
+        regions.isEmpty() -> Column(Modifier.fillMaxSize()) {
+            ScreenHeader(title = "交互地图")
+            LoadingBox(Modifier.height(240.dp))
+        }
+
+        r == null -> MapRegionList(
+            regions = regions,
+            onOpenRegion = { region = it },
+        )
+
+        else -> {
+            MapRegionLayers(
+                region = r,
+                maps = regions.first { it.first == r }.second,
+                onBack = { region = null },
+                onOpen = onOpen,
+            )
+        }
+    }
+}
+
+/** 一级：地区列表，纯文字行，不再用 Titan 插画。 */
+@Composable
+private fun MapRegionList(
+    regions: List<Pair<String, List<MapInfo>>>,
+    onOpenRegion: (String) -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "地图",
+            subtitle = "${regions.size} 个地区 · ${regions.sumOf { it.second.size }} 张地图",
+        )
+        LazyColumn(
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(regions, key = { it.first }) { (name, maps) ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Palette.Surface)
+                        .border(1.dp, Palette.CardBorder, RoundedCornerShape(16.dp))
+                        .clickable { onOpenRegion(name) }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Palette.Core.copy(alpha = 0.10f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Rounded.Map, contentDescription = null, tint = Palette.Core, modifier = Modifier.size(19.dp))
+                    }
+                    Spacer(Modifier.width(13.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(name, color = Palette.Text, fontSize = 17.sp, fontWeight = FontWeight.Medium)
                         Text(
-                            region,
-                            color = Palette.Core,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp, start = 2.dp),
+                            "${maps.size} 张地图 · ${maps.map { it.area }.distinct().size} 个区域",
+                            color = Palette.TextDim,
+                            fontSize = 12.sp,
                         )
                     }
-                    items(list, key = { it.id }) { map ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Palette.Surface)
-                                .clickable { onOpen(map.id) }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(map.area, color = Palette.Text, fontSize = 14.sp)
-                                Text(
-                                    map.landmark.ifBlank { map.id },
-                                    color = Color(0xFF5C6B7C),
-                                    fontSize = 10.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            Tag("${map.markerCount}", Palette.TextDim)
-                        }
-                    }
+                    Text("›", color = Palette.TextDim, fontSize = 20.sp)
                 }
             }
         }
     }
+}
+
+/** 二级：地区内所有层。顶部标签切换，下面显示当前层的预览。 */
+@Composable
+private fun MapRegionLayers(
+    region: String,
+    maps: List<MapInfo>,
+    onBack: () -> Unit,
+    onOpen: (String) -> Unit,
+) {
+    var selected by remember(maps) { mutableStateOf(maps.firstOrNull()?.id) }
+    val current = maps.firstOrNull { it.id == selected } ?: maps.firstOrNull()
+    Column(Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = region,
+            subtitle = "${maps.size} 张地图 · 切换层查看",
+            onBack = onBack,
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(maps, key = { it.id }) { m ->
+                MapLayerChip(
+                    text = layerLabel(m, maps),
+                    active = m.id == current?.id,
+                    onClick = { selected = m.id },
+                )
+            }
+        }
+        if (current != null) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 4.dp),
+            ) {
+                MapPreviewCard(
+                    map = current,
+                    layerTitle = layerLabel(current, maps),
+                    onOpen = { onOpen(current.id) },
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "点地图或右上角按钮进入全屏。全屏里仍可切换同地区的其它层。",
+                    color = Palette.TextDim,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                )
+                Spacer(Modifier.height(24.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MapLayerChip(text: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (active) Palette.Core else Palette.Surface)
+            .border(1.dp, if (active) Palette.Core else Palette.CardBorder, RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text,
+            color = if (active) Color.White else Palette.TextDim,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
+    }
+}
+
+/** 一级：地区目录。右侧用 Titan 插画，卡片样式对齐原版 `MapDirectoryCard`。 */
+@Composable
+private fun MapRegionDirectory(
+    regions: List<Pair<String, List<MapInfo>>>,
+    onOpenRegion: (String) -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = "交互地图",
+            subtitle = "${regions.size} 个地区 · ${regions.sumOf { it.second.size }} 张地图",
+        )
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(regions, key = { it.first }) { (name, maps) ->
+                MapDirectoryCard(
+                    title = name,
+                    subtitle = "${maps.size} 张地图",
+                    subtitleColor = regionAccent(name),
+                    accent = regionAccent(name),
+                    artwork = regionArtwork(name),
+                ) { onOpenRegion(name) }
+            }
+        }
+    }
+}
+
+/** 二级：地区内按 menu_group（Area）分组。缩略图用该 Area 第一张地图。 */
+@Composable
+private fun MapAreaDirectory(
+    region: String,
+    maps: List<MapInfo>,
+    onBack: () -> Unit,
+    onOpenArea: (String) -> Unit,
+) {
+    val areas = remember(maps) { maps.groupBy { it.area }.toList() }
+    Column(Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = region,
+            subtitle = "${areas.size} 个区域 · ${maps.size} 张地图",
+            onBack = onBack,
+        )
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(areas, key = { it.first }) { (area, list) ->
+                MapDirectoryCard(
+                    title = area,
+                    subtitle = "${list.size} 张地图",
+                    subtitleColor = areaAccent(area),
+                    accent = areaAccent(area),
+                    artwork = list.first().imagePath,
+                ) { onOpenArea(area) }
+            }
+        }
+    }
+}
+
+/** 三级：Area 内的地图预览卡片，右上角圆形按钮进全屏交互地图。 */
+@Composable
+private fun MapAreaMaps(
+    region: String,
+    area: String,
+    maps: List<MapInfo>,
+    allMaps: List<MapInfo>,
+    onBack: () -> Unit,
+    onOpen: (String) -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title = area,
+            subtitle = "$region · ${maps.size} 张地图",
+            onBack = onBack,
+        )
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(maps, key = { it.id }) { map ->
+                MapPreviewCard(
+                    map = map,
+                    layerTitle = layerLabel(map, allMaps),
+                    onOpen = { onOpen(map.id) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 原版 `MapDirectoryCard`（InteractiveMapScreensKt.java:2397）：
+ * 112dp 高、16dp 圆角、卡片 92% 不透明、强调色 15% 铺层；
+ * 右侧 188dp 宽插画贴边裁切；内层 Row 左右 18dp；
+ * 竖条 4×60dp 圆角 3dp，标题 24sp Bold，副标题 12sp SemiBold。
+ */
+@Composable
+private fun MapDirectoryCard(
+    title: String,
+    subtitle: String,
+    subtitleColor: Color,
+    accent: Color,
+    artwork: String?,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(112.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Palette.Surface.copy(alpha = 0.92f))
+            .border(1.dp, Palette.CardBorder, RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick),
+    ) {
+        // 强调色薄薄铺一层，保持原版「白卡 + 15% 主题色」的观感
+        Box(Modifier.matchParentSize().background(accent.copy(alpha = 0.15f)))
+
+        if (!artwork.isNullOrBlank()) {
+            AssetImage(
+                path = artwork,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .width(188.dp)
+                    .fillMaxHeight(),
+                contentDescription = title,
+                contentScale = ContentScale.Crop,
+            )
+        }
+
+        Row(
+            Modifier.fillMaxSize().padding(end = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(Modifier.width(20.dp))
+            Box(
+                Modifier
+                    .width(4.dp)
+                    .height(60.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(accent),
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Text(
+                    title,
+                    color = Palette.Text,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    subtitle,
+                    color = subtitleColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** Area 内单张地图的预览卡：地图缩略图 + 点位圆点 + 右上角展开按钮。 */
+@Composable
+private fun MapPreviewCard(
+    map: MapInfo,
+    layerTitle: String,
+    onOpen: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Palette.Surface)
+            .border(1.dp, Palette.CardBorder, RoundedCornerShape(16.dp))
+            .padding(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "${map.region}·${map.area}",
+                    color = Palette.TextDim,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    if (layerTitle.isBlank()) "${map.markerCount} 个点位" else "$layerTitle · ${map.markerCount} 个点位",
+                    color = areaAccent(map.area),
+                    fontSize = 10.sp,
+                )
+            }
+            Box(
+                Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xF2FFFFFF))
+                    .border(1.dp, Color(0x1F000000), CircleShape)
+                    .clickable(onClick = onOpen),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.OpenInFull,
+                    contentDescription = "打开大图",
+                    tint = Color(0xFF1A1C1F),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        MapPreview(
+            map = map,
+            markers = emptyList(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onOpen),
+        )
+    }
+}
+
+/** 只读小地图：Fit 居中显示图片，并按同一坐标变换叠点位圆点。 */
+@Composable
+private fun MapPreview(map: MapInfo, markers: List<Marker>, modifier: Modifier) {
+    Box(modifier.background(Color(0xFF0B1018)), contentAlignment = Alignment.Center) {
+        AssetImage(
+            path = map.imagePath,
+            modifier = Modifier.fillMaxSize(),
+            contentDescription = map.area,
+        )
+        Canvas(Modifier.fillMaxSize()) {
+            val imgAspect = map.aspect
+            val viewAspect = size.width / size.height
+            val w = if (imgAspect > viewAspect) size.width else size.height * imgAspect
+            val h = if (imgAspect > viewAspect) size.width / imgAspect else size.height
+            val left = (size.width - w) / 2f
+            val top = (size.height - h) / 2f
+            markers.forEach { m ->
+                val n = MapMath.normalized(map, m.frontierX, m.frontierY) ?: return@forEach
+                drawCircle(
+                    color = markerFilterColor(markerFilterKey(m)),
+                    radius = 2.4.dp.toPx(),
+                    center = Offset(left + n.first * w, top + n.second * h),
+                )
+            }
+        }
+    }
+}
+
+/** 原版 `regionArtwork()`：15 个地区各有一张 Titan 插画（从 1.2.2 原包提取）。 */
+private val REGION_ARTWORK = mapOf(
+    "阿伐利缇亚商会" to "regions/argentum-trade-guild.webp",
+    "云海探查船 涡潮号" to "regions/c-s-e-v-maelstrom.webp",
+    "古代船" to "regions/ancient-ship.webp",
+    "古拉" to "regions/gormott-province.webp",
+    "英维迪亚烈王国" to "regions/kingdom-of-uraya.webp",
+    "斯佩比亚帝国" to "regions/empire-of-mor-ardain.webp",
+    "檀佩兰提亚" to "regions/temperantia.webp",
+    "阿卡狄亚教廷" to "regions/indoline-praetorium.webp",
+    "洛修利亚王国" to "regions/kingdom-of-tantal.webp",
+    "利贝拉里塔斯岛屿群" to "regions/leftherian-archipelago.webp",
+    "艾尔皮斯灵洞" to "regions/spirit-crucible-elpys.webp",
+    "莫尔斯断崖" to "regions/cliffs-of-morytha.webp",
+    "莫尔斯之地" to "regions/land-of-morytha.webp",
+    "世界树" to "regions/world-tree.webp",
+    "第一低轨道站" to "regions/first-low-orbit-station.webp",
+)
+
+private fun regionArtwork(region: String): String? = REGION_ARTWORK[region]
+
+/** 原版 `regionAccent()`。 */
+private fun regionAccent(region: String): Color = when (region) {
+    "第一低轨道站" -> Color(0xFF5EAFA5)
+    "洛修利亚王国" -> Color(0xFF4385D4)
+    "艾尔皮斯灵洞" -> Color(0xFF5B5DD1)
+    "利贝拉里塔斯岛屿群" -> Color(0xFF008F83)
+    "云海探查船 涡潮号", "世界树" -> Color(0xFF56EBFF)
+    "古拉" -> Color(0xFF2F9348)
+    "古代船" -> Color(0xFF667891)
+    "檀佩兰提亚" -> Color(0xFF2E3D4F)
+    "斯佩比亚帝国" -> Color(0xFFD40011)
+    "阿卡狄亚教廷" -> Color(0xFFD49A05)
+    "莫尔斯之地" -> Color(0xFF66514F)
+    "莫尔斯断崖" -> Color(0xFF808080)
+    "英维迪亚烈王国" -> Color(0xFF7653B5)
+    else -> Color(0xFFFFC107)
+}
+
+/** 原版 `areaAccent()`：按 area 名哈希从 6 色里取。 */
+private fun areaAccent(area: String): Color {
+    val palette = listOf(
+        Color(0xFF56EBFF),
+        Color(0xFFFFC107),
+        Color(0xFFD40011),
+        Color(0xFF2F9348),
+        Color(0xFF7653B5),
+        Color(0xFF008F83),
+    )
+    return palette[Math.floorMod(area.hashCode(), palette.size)]
 }
 
 @Composable
@@ -146,13 +579,17 @@ fun MapDetailScreen(
     var markers by remember(mapId) { mutableStateOf<List<Marker>>(emptyList()) }
     var planSteps by remember(mapId, planId) { mutableStateOf<List<PlanStep>>(emptyList()) }
     var allSteps by remember(mapId, planId) { mutableStateOf<List<PlanStep>>(emptyList()) }
-    var visibleTypes by remember(mapId) { mutableStateOf<Set<String>>(emptySet()) }
+    // 筛选按原版 `MarkerFilterBar`：全局记忆（interactive_map_settings），换图也保留
+    var visibleFilters by remember(mapId) { mutableStateOf(Prefs.mapFilterKeys ?: MARKER_FILTER_DEFAULTS) }
+    // 原版「显示已收藏」：关掉后隐藏已收藏的点位
+    var showsMarked by remember(mapId) { mutableStateOf(Prefs.mapShowsMarked) }
     var selected by remember(mapId) { mutableStateOf<Marker?>(null) }
     var selectedPin by remember(mapId) { mutableStateOf<OverlayPin?>(null) }
     var siblings by remember(mapId) { mutableStateOf<List<MapInfo>>(emptyList()) }
     // 计划地图默认「只看计划点 + 最近传送点/地标」，避免几百个无关点位糊满屏
     var focusMode by remember(mapId, planId) { mutableStateOf(planId != null) }
     var toast by remember { mutableStateOf<String?>(null) }
+    var filterMenu by remember { mutableStateOf(false) }
     var pendingPin by remember(mapId) { mutableStateOf<Pair<Double, Double>?>(null) }
     var pinTitle by remember(mapId) { mutableStateOf("") }
     var bindStepId by remember(mapId) { mutableStateOf<Long?>(null) }
@@ -165,13 +602,20 @@ fun MapDetailScreen(
 
     LaunchedEffect(mapId) {
         val loaded = WikiRepo.io {
-            val ms = WikiRepo.markersOf(mapId)
+            val ms = WikiRepo.interactiveMarkers(mapId)
             val info = WikiRepo.map(mapId)
-            Triple(ms, ms.map { it.targetType }.distinct(), info?.let { i -> WikiRepo.maps().filter { it.region == i.region } } ?: emptyList())
+            // 同一地区内的分层图都可以切换（上层右半身 / 上层左半身 / 下层 / 战舰…）。
+            // 只按 Area（menu_group）分组会漏掉古拉这种「不同 Area 其实是同一张巨神兽的层」。
+            val layers = info?.let { i ->
+                WikiRepo.maps().filter {
+                    it.region == i.region &&
+                        it.imagePath.isNotBlank() && it.markerCount > 0
+                }
+            } ?: emptyList()
+            ms to layers
         }
         markers = loaded.first
-        visibleTypes = loaded.second.toSet()
-        siblings = loaded.third
+        siblings = loaded.second
         map = WikiRepo.map(mapId)
     }
 
@@ -207,7 +651,7 @@ fun MapDetailScreen(
         val sx = first.fx ?: 0.0
         val sy = first.fy ?: 0.0
         val anchor = markers
-            .filter { it.targetType == "WarpPoint" || it.targetType == "DoorPoint" }
+            .filter { it.targetType == "RouteAccessPoint" }
             .ifEmpty { markers.filter { it.targetType == "Location" } }
             .minByOrNull { m ->
                 val dx = m.frontierX - sx
@@ -254,7 +698,7 @@ fun MapDetailScreen(
                         val dy = m.frontierY - sy
                         dx * dx + dy * dy
                     }
-                nearest(setOf("WarpPoint", "DoorPoint"))?.let { picked.add(it.featureId) }
+                nearest(setOf("RouteAccessPoint"))?.let { picked.add(it.featureId) }
                 nearest(setOf("Location"))?.let { picked.add(it.featureId) }
             }
             markers.filter { it.featureId in picked }
@@ -285,6 +729,73 @@ fun MapDetailScreen(
             onBack = onBack,
         )
 
+        // 原版 `InteractiveMapDetailScreen`：左上「图标筛选」12sp 灰字，右上 48dp 圆形按钮 + DropdownMenu。
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 16.dp, top = 10.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "图标筛选",
+                color = Palette.TextDim,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            Box {
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Palette.Surface.copy(alpha = 0.92f))
+                        .border(1.dp, Color(0x1F000000), CircleShape)
+                        .clickable { filterMenu = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.FilterList,
+                        contentDescription = "图标筛选",
+                        tint = Palette.Text,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                DropdownMenu(
+                    expanded = filterMenu,
+                    onDismissRequest = { filterMenu = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("已收藏", fontSize = 13.sp) },
+                        leadingIcon = {
+                            MarkerFilterGlyph(FAVORITE_FILTER_KEY, markerFilterColor(FAVORITE_FILTER_KEY), 16.dp)
+                        },
+                        trailingIcon = {
+                            if (showsMarked) Icon(Icons.Rounded.Check, null, tint = Palette.Core, modifier = Modifier.size(18.dp))
+                        },
+                        onClick = {
+                            showsMarked = !showsMarked
+                            Prefs.applyMapShowsMarked(showsMarked)
+                        },
+                    )
+                    MARKER_FILTERS.forEach { f ->
+                        DropdownMenuItem(
+                            text = { Text(f.label, fontSize = 13.sp) },
+                            leadingIcon = { MarkerFilterGlyph(f.key, f.color, 16.dp) },
+                            trailingIcon = {
+                                if (f.key in visibleFilters) {
+                                    Icon(Icons.Rounded.Check, null, tint = Palette.Core, modifier = Modifier.size(18.dp))
+                                }
+                            },
+                            onClick = {
+                                visibleFilters = if (f.key in visibleFilters) visibleFilters - f.key else visibleFilters + f.key
+                                Prefs.applyMapFilters(visibleFilters)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
         // 同一地区常常分「上层 / 中层 / 下层 / 头部 / 腹部 …」，切层入口必须一直看得见，
         // 否则计划步骤落在别的层上时会被误以为「没规划」。
         if (siblings.size > 1 || planId != null) {
@@ -309,10 +820,10 @@ fun MapDetailScreen(
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(14.dp))
-                                .background(if (on) Palette.Core.copy(alpha = 0.14f) else Color(0xFF101720))
+                                .background(if (on) Palette.Core.copy(alpha = 0.14f) else Palette.SurfaceHigh)
                                 .border(
                                     1.dp,
-                                    if (on) Palette.Core.copy(alpha = 0.5f) else Color(0xFF26313F),
+                                    if (on) Palette.Core.copy(alpha = 0.5f) else Palette.CardBorder,
                                     RoundedCornerShape(14.dp),
                                 )
                                 .clickable { focusMode = !on }
@@ -328,14 +839,14 @@ fun MapDetailScreen(
                             append(layerLabel(s, siblings))
                             if (steps > 0) append(" · $steps 步")
                         },
-                        color = if (on) Palette.Text else Palette.TextDim,
+                        color = if (on) Palette.Core else Palette.TextDim,
                         fontSize = 11.sp,
                         modifier = Modifier
                             .clip(RoundedCornerShape(14.dp))
-                            .background(if (on) Palette.SurfaceHigh else Color(0xFF101720))
+                            .background(if (on) Palette.Core.copy(alpha = 0.14f) else Palette.SurfaceHigh)
                             .border(
                                 1.dp,
-                                if (on) Color(0xFF2E4A5E) else Color(0xFF202B38),
+                                if (on) Palette.Core.copy(alpha = 0.5f) else Palette.CardBorder,
                                 RoundedCornerShape(14.dp),
                             )
                             .clickable { if (!on) onSwitchMap(s.id) }
@@ -352,12 +863,23 @@ fun MapDetailScreen(
 
         // 放大后地图会按缩放画到画布边界之外（Compose 默认不裁切），会把上面的标题盖掉，
         // 这里显式裁到地图区域。
-        Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(horizontal = 20.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Palette.Surface)
+                .border(1.dp, Palette.CardBorder, RoundedCornerShape(16.dp))
+                .clipToBounds(),
+        ) {
             MapCanvas(
                 map = m,
                 viewState = viewState,
-                markers = if (focusMode) focusMarkers else markers,
-                visibleTypes = if (focusMode) focusMarkers.map { it.targetType }.toSet() else visibleTypes,
+                // 原版「显示已收藏」关掉时，已收藏的点位不画
+                markers = (if (focusMode) focusMarkers else markers)
+                    .filter { showsMarked || !Prefs.isMarkedKey(markerMarkKey(it)) },
+                visibleTypes = if (focusMode) focusMarkers.map { markerFilterKey(it) }.toSet() else visibleFilters,
                 overlay = planSteps
                     .filter { s ->
                         val fx = s.fx
@@ -520,48 +1042,9 @@ fun MapDetailScreen(
                     }
                 }
             }
-        } else {
-            val allTypes = markers.map { it.targetType }.distinct()
-                .sortedBy { typeOrder(it) }
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                items(allTypes) { type ->
-                    val on = visibleTypes.contains(type)
-                    Row(
-                        Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(if (on) Palette.SurfaceHigh else Color(0xFF101720))
-                            .clickable {
-                                visibleTypes = if (on) visibleTypes - type else visibleTypes + type
-                            }
-                            .padding(horizontal = 7.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (on) {
-                            MarkerGlyphBadge(type, 15.dp)
-                        } else {
-                            Box(
-                                Modifier
-                                    .size(12.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF2A3646)),
-                            )
-                        }
-                        Spacer(Modifier.width(5.dp))
-                        Text(
-                            "${markerTypeLabel(type)} ${markers.count { it.targetType == type }}",
-                            color = if (on) Palette.Text else Color(0xFF5C6B7C),
-                            fontSize = 11.sp,
-                        )
-                    }
-                }
-            }
         }
-    }
 
-    val pending = pendingPin
+        val pending = pendingPin
     if (pending != null) {
         val unpinned = if (planId != null) allSteps.filter { !it.pinned } else emptyList()
         val binding = bindStepId != null
@@ -592,7 +1075,7 @@ fun MapDetailScreen(
                                         .fillMaxWidth()
                                         .padding(vertical = 2.dp)
                                         .clip(RoundedCornerShape(6.dp))
-                                        .background(if (on) Palette.Core.copy(alpha = 0.16f) else Color(0xFF101720))
+                                        .background(if (on) Palette.Core.copy(alpha = 0.16f) else Palette.SurfaceHigh)
                                         .clickable { bindStepId = if (on) null else step.id }
                                         .padding(horizontal = 8.dp, vertical = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -615,7 +1098,7 @@ fun MapDetailScreen(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(Palette.Bg)
-                                .border(1.dp, Color(0xFF26313F), RoundedCornerShape(8.dp))
+                                .border(1.dp, Palette.CardBorder, RoundedCornerShape(8.dp))
                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                         ) {
                             if (pinTitle.isEmpty()) {
@@ -681,6 +1164,10 @@ fun MapDetailScreen(
         )
     }
 }
+}
+
+/** 收藏用的稳定 key：同一张图的同一个点位。 */
+private fun markerMarkKey(m: Marker): String = "map:${m.featureId}"
 
 private fun typeOrder(type: String) = when (type) {
     "Location" -> 0
@@ -739,6 +1226,14 @@ private fun RoundIcon(
 
 @Composable
 private fun MarkerCard(marker: Marker, modifier: Modifier, onAddToPlan: () -> Unit) {
+    // 采集点在 wiki 上有游戏内实景截图，卡片里直接给一个可展开的预览。
+    val shot by produceState<String?>(null, marker.featureId) {
+        value = if (marker.targetType == "CollectionPoint") {
+            WikiRepo.io {
+                WikiShots.fileNameForCollection(WikiRepo.collectionCodeOfFeature(marker.featureId))
+            }
+        } else null
+    }
     Column(
         modifier
             .fillMaxWidth()
@@ -757,9 +1252,31 @@ private fun MarkerCard(marker: Marker, modifier: Modifier, onAddToPlan: () -> Un
                 color = Color(0xFF5C6B7C),
                 fontSize = 10.sp,
             )
+            Spacer(Modifier.width(6.dp))
+            // 收藏：和筛选条最左边的「已收藏」开关联动，关掉后地图上不再显示这个点
+            val markKey = markerMarkKey(marker)
+            val marked = Prefs.isMarkedKey(markKey)
+            Box(
+                Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .clickable { Prefs.toggleMarkedKey(markKey) },
+                contentAlignment = Alignment.Center,
+            ) {
+                androidx.compose.material3.Icon(
+                    imageVector = if (marked) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                    contentDescription = if (marked) "取消收藏" else "收藏",
+                    tint = if (marked) Color(0xFFFFC107) else Color(0xFF5C6B7C),
+                    modifier = Modifier.size(17.dp),
+                )
+            }
         }
         Spacer(Modifier.height(4.dp))
         Text(marker.targetName.ifBlank { marker.featureId }, color = Palette.Text, fontSize = 14.sp)
+        if (!shot.isNullOrBlank()) {
+            Spacer(Modifier.height(8.dp))
+            WikiShotPanel(shot)
+        }
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -771,8 +1288,6 @@ private fun MarkerCard(marker: Marker, modifier: Modifier, onAddToPlan: () -> Un
             ) {
                 Text("加入计划", color = Palette.Core, fontSize = 12.sp)
             }
-            Spacer(Modifier.width(8.dp))
-            Text(marker.featureId, color = Color(0xFF44505F), fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

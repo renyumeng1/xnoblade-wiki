@@ -9,21 +9,24 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,137 +44,115 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import cn.xenoblade2.next.data.Db
+import cn.xenoblade2.next.data.Prefs
 import cn.xenoblade2.next.data.SearchHit
-import cn.xenoblade2.next.ui.components.AssetImage
 import cn.xenoblade2.next.data.WikiRepo
-import cn.xenoblade2.next.plan.Plan
-import cn.xenoblade2.next.plan.PlanStore
-import cn.xenoblade2.next.ui.components.ScreenHeader
-import cn.xenoblade2.next.ui.components.SectionCard
+import cn.xenoblade2.next.ui.components.AssetImage
 import cn.xenoblade2.next.ui.components.Tag
+import cn.xenoblade2.next.ui.nav.HOME_DESC
+import cn.xenoblade2.next.ui.nav.HOME_ENTRIES
+import cn.xenoblade2.next.ui.nav.HOME_ENTRY_BY_KEY
+import cn.xenoblade2.next.ui.nav.HOME_GROUPS
+import cn.xenoblade2.next.ui.nav.HomeGroup
+import cn.xenoblade2.next.ui.nav.HomeEntry
 import cn.xenoblade2.next.ui.theme.Palette
 import kotlinx.coroutines.delay
 
 @Composable
 fun HomeScreen(
-    onOpenQuests: () -> Unit,
-    onOpenPlans: () -> Unit,
-    onOpenMaps: () -> Unit,
-    onOpenBlades: () -> Unit,
-    onOpenAgent: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenQuest: (Long) -> Unit,
-    onOpenBlade: (Long, String) -> Unit,
+    onOpenEntry: (String) -> Unit,
+    onOpenHit: (SearchHit) -> Unit,
 ) {
-    var stats by remember { mutableStateOf(listOf<Pair<String, Int>>()) }
-    var plans by remember { mutableStateOf<List<Plan>>(emptyList()) }
     var query by remember { mutableStateOf("") }
-    var hits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
-
-    LaunchedEffect(Unit) {
-        stats = WikiRepo.io {
-            listOf(
-                "任务" to Db.count("SELECT COUNT(*) FROM quest"),
-                "可拆步骤" to Db.count("SELECT COUNT(*) FROM task_workflow_step"),
-                "异刃" to Db.count("SELECT COUNT(*) FROM blade"),
-                "环等级需求" to Db.count("SELECT COUNT(*) FROM blade_affinity_level"),
-                "交互地图" to Db.count("SELECT COUNT(*) FROM map WHERE marker_count > 0"),
-                "图上点位" to Db.count("SELECT COUNT(*) FROM frontiernav_map_marker"),
-            )
-        }
-        plans = WikiRepo.io { PlanStore.plans() }
-    }
+    var hits by remember { mutableStateOf<List<SearchHit>?>(null) }
 
     LaunchedEffect(query) {
         if (query.isBlank()) {
-            hits = emptyList()
+            hits = null
             return@LaunchedEffect
         }
         delay(220)
-        hits = WikiRepo.io { WikiRepo.search(query.trim(), 30) }
+        hits = WikiRepo.io { WikiRepo.search(query.trim(), 60) }
     }
 
-    Column(Modifier.fillMaxWidth()) {
-        ScreenHeader(
-            title = "异度神剑 2 NEXT",
-            subtitle = "离线百科 · 可落图的行动规划",
-            actions = {
-                IconButton(onClick = onOpenSettings) {
-                    Icon(Icons.Filled.Settings, contentDescription = "设置", tint = Palette.TextDim)
-                }
-            },
-        )
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            HomeHeader()
+            SearchField(
+                query = query,
+                onQueryChange = { query = it },
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp),
+            )
 
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            item { SearchBox(query) { query = it } }
-
-            if (query.isNotBlank()) {
-                if (hits.isEmpty()) {
-                    item { Text("没有匹配的条目", color = Palette.TextDim, fontSize = 13.sp) }
-                }
-                items(hits, key = { "${it.type}-${it.id}" }) { hit ->
-                    SearchRow(hit) {
-                        when (hit.type) {
-                            "quest" -> onOpenQuest(hit.id)
-                            "blade" -> onOpenBlade(hit.id, hit.title)
-                            else -> Unit
-                        }
-                    }
-                }
+            val result = hits
+            if (query.isBlank() || result == null) {
+                HomeList(onOpenEntry = onOpenEntry)
             } else {
-                item { StatGrid(stats) }
-
-                item {
-                    SectionCard(title = "快速开始") {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            QuickTile("任务地图\n规划", onOpenQuests, Modifier.weight(1f))
-                            QuickTile("异刃\n开环", onOpenBlades, Modifier.weight(1f))
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            QuickTile("交互\n地图", onOpenMaps, Modifier.weight(1f))
-                            QuickTile("智能\n助手", onOpenAgent, Modifier.weight(1f))
-                        }
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 96.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (result.isEmpty()) {
+                        item { Text("没有匹配的条目", color = Palette.TextDim, fontSize = 13.sp) }
+                    }
+                    items(result, key = { "${it.type}-${it.id}" }) { hit ->
+                        SearchRow(hit) { onOpenHit(hit) }
                     }
                 }
+            }
+        }
 
-                item {
-                    SectionCard(
-                        title = "进行中的计划",
-                        trailing = {
-                            Text(
-                                "全部",
-                                color = Palette.Core,
-                                fontSize = 12.sp,
-                                modifier = Modifier.clickable { onOpenPlans() },
-                            )
-                        },
-                    ) {
-                        if (plans.isEmpty()) {
-                            Text(
-                                "还没有计划。在任务详情页点「生成地图计划」，或在助手页发「开环 焰」。",
-                                color = Palette.TextDim,
-                                fontSize = 13.sp,
-                            )
-                        }
-                        plans.take(3).forEach { plan ->
-                            PlanMiniRow(plan) { onOpenPlans() }
-                        }
+    }
+}
+
+@Composable
+private fun HomeHeader() {
+    Column(Modifier.padding(start = 22.dp, end = 22.dp, top = 24.dp)) {
+        Text(
+            "幽界手记",
+            style = MaterialTheme.typography.displaySmall,
+            color = Palette.Text,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "异度神剑 2 · 图鉴与路线",
+            color = Palette.TextDim,
+            fontSize = 13.sp,
+            letterSpacing = 0.2.sp,
+        )
+    }
+}
+
+@Composable
+private fun HomeList(onOpenEntry: (String) -> Unit) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        HOME_GROUPS.forEach { group ->
+            item(key = "head-${group.title}") { HomeGroupHeader(group) }
+            item(key = "group-${group.title}") {
+                HomeGroupCard(group, onOpenEntry)
+            }
+        }
+
+        val recents = Prefs.recents.mapNotNull { HOME_ENTRY_BY_KEY[it] }
+        if (recents.isNotEmpty()) {
+            item { HomeGroupHeader(HomeGroup("最近访问", "上次看过的条目", emptyList())) }
+            item {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Palette.Surface)
+                        .border(1.dp, Palette.CardBorder, RoundedCornerShape(18.dp)),
+                ) {
+                    recents.forEachIndexed { i, entry ->
+                        HomeRow(entry, onOpenEntry)
+                        if (i < recents.lastIndex) Hairline()
                     }
-                }
-
-                item {
-                    Text(
-                        "数据来自 FrontierNav / Fandom 社区整理，仅供个人游玩参考。",
-                        color = Color(0xFF5C6B7C),
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
-                    )
                 }
             }
         }
@@ -179,30 +160,141 @@ fun HomeScreen(
 }
 
 @Composable
-private fun SearchBox(query: String, onChange: (String) -> Unit) {
+private fun HomeGroupHeader(group: HomeGroup) {
+    Row(
+        Modifier.padding(top = 12.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        Text(
+            group.title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = Palette.Text,
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            group.subtitle,
+            color = Palette.TextDim,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 3.dp),
+        )
+    }
+}
+
+@Composable
+private fun HomeGroupCard(group: HomeGroup, onOpenEntry: (String) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Palette.Surface)
+            .border(1.dp, Palette.CardBorder, RoundedCornerShape(18.dp)),
+    ) {
+        val entries = group.keys.mapNotNull { HOME_ENTRY_BY_KEY[it] }
+        entries.forEachIndexed { i, entry ->
+            HomeRow(entry, onOpenEntry)
+            if (i < entries.lastIndex) Hairline()
+        }
+    }
+}
+
+@Composable
+private fun HomeRow(entry: HomeEntry, onOpenEntry: (String) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Palette.SurfaceHigh)
-            .border(1.dp, Color(0xFF26313F), RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .clickable { onOpenEntry(entry.key) }
+            .padding(horizontal = 16.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.Search, contentDescription = null, tint = Palette.TextDim, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Palette.Core.copy(alpha = 0.10f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                entry.icon,
+                contentDescription = null,
+                tint = Palette.Core,
+                modifier = Modifier.size(19.dp),
+            )
+        }
+        Spacer(Modifier.width(13.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.title,
+                color = Palette.Text,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            HOME_DESC[entry.key]?.let { desc ->
+                Text(
+                    desc,
+                    color = Palette.TextDim,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+        if (entry.showsCollectionCount) {
+            Text(
+                "${Prefs.marked.size}",
+                color = Palette.TextDim,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        Text("›", color = Palette.TextDim, fontSize = 20.sp)
+    }
+}
+
+@Composable
+private fun Hairline() {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 63.dp)
+            .height(1.dp)
+            .background(Palette.CardBorder),
+    )
+}
+
+@Composable
+fun SearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "搜索异刃、任务、物品…",
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 54.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(Palette.Surface.copy(alpha = 0.92f))
+            .border(1.dp, Palette.Core.copy(alpha = 0.35f), RoundedCornerShape(28.dp))
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = Palette.Core, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(12.dp))
         Box(Modifier.weight(1f)) {
             if (query.isEmpty()) {
-                Text("搜任务 / 异刃 / 敌人 / 物品", color = Color(0xFF5C6B7C), fontSize = 14.sp)
+                Text(placeholder, color = Palette.TextDim, fontSize = 15.sp)
             }
             BasicTextField(
                 value = query,
-                onValueChange = onChange,
-                textStyle = TextStyle(color = Palette.Text, fontSize = 14.sp),
+                onValueChange = onQueryChange,
+                textStyle = TextStyle(color = Palette.Text, fontSize = 15.sp),
                 cursorBrush = SolidColor(Palette.Core),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+        if (query.isNotEmpty()) {
+            IconButton(onClick = { onQueryChange("") }) {
+                Icon(Icons.Filled.Close, contentDescription = "清空", tint = Palette.TextDim, modifier = Modifier.size(18.dp))
+            }
         }
     }
 }
@@ -212,8 +304,9 @@ private fun SearchRow(hit: SearchHit, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(Palette.Surface)
+            .border(1.dp, Palette.CardBorder, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -221,7 +314,7 @@ private fun SearchRow(hit: SearchHit, onClick: () -> Unit) {
         if (!hit.iconPath.isNullOrBlank()) {
             AssetImage(
                 path = hit.iconPath,
-                modifier = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)),
+                modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)),
                 contentDescription = hit.title,
             )
             Spacer(Modifier.width(10.dp))
@@ -239,7 +332,7 @@ private fun SearchRow(hit: SearchHit, onClick: () -> Unit) {
 private fun typeLabel(type: String) = when (type) {
     "quest" -> "任务"
     "blade" -> "异刃"
-    "enemy" -> "敌人"
+    "enemy" -> "怪物"
     "item" -> "物品"
     "location" -> "地点"
     else -> type
@@ -249,91 +342,6 @@ private fun typeColor(type: String) = when (type) {
     "quest" -> Palette.Gold
     "blade" -> Palette.Core
     "enemy" -> Palette.Flame
+    "item" -> Palette.Brown
     else -> Palette.TextDim
-}
-
-@Composable
-private fun StatGrid(stats: List<Pair<String, Int>>) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Palette.Surface)
-            .padding(14.dp),
-    ) {
-        Row(Modifier.fillMaxWidth()) {
-            stats.take(3).forEach { (label, value) ->
-                StatCell(label, value, Modifier.weight(1f))
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth()) {
-            stats.drop(3).take(3).forEach { (label, value) ->
-                StatCell(label, value, Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatCell(label: String, value: Int, modifier: Modifier) {
-    Column(modifier) {
-        Text(
-            if (value >= 1000) String.format("%,d", value) else value.toString(),
-            color = Palette.Core,
-            fontSize = 20.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(label, color = Palette.TextDim, fontSize = 11.sp)
-    }
-}
-
-@Composable
-private fun QuickTile(text: String, onClick: () -> Unit, modifier: Modifier) {
-    Box(
-        modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(Palette.SurfaceHigh)
-            .border(1.dp, Color(0xFF26313F), RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text,
-            color = Palette.Text,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
-    }
-}
-
-@Composable
-private fun PlanMiniRow(plan: Plan, onClick: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 7.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                plan.title,
-                color = Palette.Text,
-                fontSize = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Text("${plan.doneCount}/${plan.stepCount}", color = Palette.TextDim, fontSize = 12.sp)
-        }
-        Spacer(Modifier.height(5.dp))
-        LinearProgressIndicator(
-            progress = { plan.progress.coerceIn(0f, 1f) },
-            modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-            color = Palette.Core,
-            trackColor = Color(0xFF23303F),
-        )
-    }
 }

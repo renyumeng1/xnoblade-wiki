@@ -6,20 +6,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Checklist
-import androidx.compose.material.icons.filled.Map
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.outlined.AutoStories
-import androidx.compose.material.icons.outlined.Hardware
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Assignment
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Map
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -29,22 +26,31 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.xenoblade2.next.data.Db
+import cn.xenoblade2.next.data.Prefs
+import cn.xenoblade2.next.data.SearchHit
+import cn.xenoblade2.next.data.WikiRepo
 import cn.xenoblade2.next.plan.Gazetteer
 import cn.xenoblade2.next.plan.PlanStore
 import cn.xenoblade2.next.ui.screens.AgentScreen
+import cn.xenoblade2.next.ui.screens.ArchiveScreen
 import cn.xenoblade2.next.ui.screens.BladeDetailScreen
 import cn.xenoblade2.next.ui.screens.BladeListScreen
+import cn.xenoblade2.next.ui.screens.EnemyDetailScreen
+import cn.xenoblade2.next.ui.screens.EnemyListScreen
+import cn.xenoblade2.next.ui.screens.EntityDetailScreen
 import cn.xenoblade2.next.ui.screens.HomeScreen
 import cn.xenoblade2.next.ui.screens.MapDetailScreen
 import cn.xenoblade2.next.ui.screens.MapListScreen
 import cn.xenoblade2.next.ui.screens.PlanDetailScreen
 import cn.xenoblade2.next.ui.screens.PlanListScreen
+import cn.xenoblade2.next.ui.screens.QuestCategoryScreen
 import cn.xenoblade2.next.ui.screens.QuestDetailScreen
 import cn.xenoblade2.next.ui.screens.QuestListScreen
 import cn.xenoblade2.next.ui.screens.SettingsScreen
@@ -55,16 +61,31 @@ import kotlinx.coroutines.withContext
 
 sealed interface Screen {
     data object Home : Screen
-    data object QuestList : Screen
-    data object BladeList : Screen
-    data object MapList : Screen
-    data object PlanList : Screen
     data object Settings : Screen
     data object Agent : Screen
+    data object QuestList : Screen
+    data class QuestCategory(val category: String) : Screen
+    data object BladeList : Screen
+    data object EnemyList : Screen
+    data object MapList : Screen
+    data object PlanList : Screen
+    data class Archive(val key: String) : Screen
+    data class EntityDetail(val type: String, val id: Long) : Screen
     data class QuestDetail(val id: Long) : Screen
     data class BladeDetail(val id: Long, val name: String) : Screen
+    data class EnemyDetail(val id: Long) : Screen
     data class MapDetail(val mapId: String, val planId: Long? = null) : Screen
     data class PlanDetail(val planId: Long) : Screen
+}
+
+/** 首页入口 key → 顶层页面。已经有专门页面的走专门页面，其余走通用档案页。 */
+fun screenForEntry(key: String): Screen = when (key) {
+    "blades" -> Screen.BladeList
+    "quests" -> Screen.QuestList
+    "monsters" -> Screen.EnemyList
+    "maps" -> Screen.MapList
+    "planner" -> Screen.PlanList
+    else -> Screen.Archive(key)
 }
 
 class Navigator {
@@ -95,6 +116,7 @@ fun App() {
     LaunchedEffect(Unit) {
         try {
             withContext(Dispatchers.IO) {
+                Prefs.init(context)
                 Db.init(context)
                 PlanStore.init(context)
                 Gazetteer.ensureLoaded()
@@ -121,7 +143,7 @@ fun App() {
 
             !ready -> Box(Modifier.fillMaxSize().background(Palette.Bg), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("异度神剑 2 NEXT", color = Palette.Core, fontSize = 18.sp)
+                    Text("异度神剑 2", color = Palette.Core, fontSize = 18.sp)
                     Text("正在装载本地数据库…", color = Palette.TextDim, fontSize = 12.sp)
                 }
             }
@@ -133,52 +155,46 @@ fun App() {
 
 private data class Tab(val screen: Screen, val label: String, val icon: ImageVector)
 
-private val TABS = listOf(
-    Tab(Screen.Home, "首页", Icons.Outlined.AutoStories),
-    Tab(Screen.QuestList, "任务", Icons.Filled.Search),
-    Tab(Screen.BladeList, "异刃", Icons.Outlined.Hardware),
-    Tab(Screen.MapList, "地图", Icons.Filled.Map),
-    Tab(Screen.PlanList, "计划", Icons.Filled.Checklist),
-)
-
 @Composable
 private fun MainScaffold() {
     val nav = remember { Navigator() }
     val current = nav.current
-    val topLevel = TABS.any { it.screen == current }
 
-    BackHandler(enabled = nav.stack.size > 1) { nav.pop() }
+    // 固定四项：图鉴 / 地图 / 记录 / 设置。图鉴里的自定义入口留在设置页，不再改底栏。
+    val tabs = remember {
+        listOf(
+            Tab(Screen.Home, "图鉴", Icons.Rounded.GridView),
+            Tab(Screen.MapList, "地图", Icons.Rounded.Map),
+            Tab(Screen.PlanList, "记录", Icons.AutoMirrored.Rounded.Assignment),
+            Tab(Screen.Settings, "设置", Icons.Rounded.Settings),
+        )
+    }
+    val topLevel = tabs.any { it.screen == current }
+
+    // 顶层 Tab 是「替换栈底」而不是入栈，直接按返回会退出 App。这里补一层：
+    // 有栈就退栈，栈底不是首页就回首页。
+    BackHandler(enabled = nav.stack.size > 1 || nav.current != Screen.Home) {
+        if (nav.stack.size > 1) nav.pop() else nav.switchTop(Screen.Home)
+    }
 
     Scaffold(
         containerColor = Palette.Bg,
         bottomBar = {
             NavigationBar(containerColor = Palette.Surface, tonalElevation = 0.dp) {
-                TABS.forEach { tab ->
+                tabs.forEach { tab ->
                     NavigationBarItem(
                         selected = current == tab.screen,
                         onClick = { if (current != tab.screen) nav.switchTop(tab.screen) },
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label, fontSize = 11.sp) },
+                        label = { Text(tab.label, fontSize = 11.sp, maxLines = 1) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Palette.Core,
                             selectedTextColor = Palette.Core,
                             unselectedIconColor = Palette.TextDim,
                             unselectedTextColor = Palette.TextDim,
-                            indicatorColor = Palette.Core.copy(alpha = 0.12f),
+                            indicatorColor = Color.Transparent,
                         ),
                     )
-                }
-            }
-        },
-        floatingActionButton = {
-            if (topLevel) {
-                ExtendedFloatingActionButton(
-                    onClick = { nav.push(Screen.Agent) },
-                    containerColor = Palette.Core,
-                    contentColor = Palette.Bg,
-                ) {
-                    Icon(Icons.Filled.AutoAwesome, contentDescription = null)
-                    Text("  助手", fontSize = 13.sp)
                 }
             }
         },
@@ -186,18 +202,24 @@ private fun MainScaffold() {
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (val s = current) {
                 Screen.Home -> HomeScreen(
-                    onOpenQuests = { nav.switchTop(Screen.QuestList) },
-                    onOpenPlans = { nav.switchTop(Screen.PlanList) },
-                    onOpenMaps = { nav.switchTop(Screen.MapList) },
-                    onOpenBlades = { nav.switchTop(Screen.BladeList) },
-                    onOpenAgent = { nav.push(Screen.Agent) },
-                    onOpenSettings = { nav.push(Screen.Settings) },
-                    onOpenQuest = { nav.push(Screen.QuestDetail(it)) },
-                    onOpenBlade = { id, name -> nav.push(Screen.BladeDetail(id, name)) },
+                    onOpenEntry = { key ->
+                        Prefs.pushRecent(key)
+                        nav.switchTop(screenForEntry(key))
+                    },
+                    onOpenHit = { hit -> openHit(nav, hit) },
                 )
 
-                Screen.QuestList -> QuestListScreen(onOpen = { nav.push(Screen.QuestDetail(it)) })
+                Screen.QuestList -> QuestListScreen(
+                    onOpenCategory = { nav.push(Screen.QuestCategory(it)) },
+                )
+
+                is Screen.QuestCategory -> QuestCategoryScreen(
+                    category = s.category,
+                    onBack = { nav.pop() },
+                    onOpen = { nav.push(Screen.QuestDetail(it)) },
+                )
                 Screen.BladeList -> BladeListScreen(onOpen = { id, name -> nav.push(Screen.BladeDetail(id, name)) })
+                Screen.EnemyList -> EnemyListScreen(onOpen = { nav.push(Screen.EnemyDetail(it)) })
                 Screen.MapList -> MapListScreen(onOpen = { nav.push(Screen.MapDetail(it)) })
                 Screen.PlanList -> PlanListScreen(
                     onOpen = { nav.push(Screen.PlanDetail(it)) },
@@ -209,7 +231,24 @@ private fun MainScaffold() {
                     onOpenPlan = { nav.push(Screen.PlanDetail(it)) },
                 )
 
-                Screen.Settings -> SettingsScreen(onBack = { nav.pop() })
+                Screen.Settings -> SettingsScreen(
+                    onBack = {
+                        if (nav.stack.size > 1) nav.pop() else nav.switchTop(Screen.Home)
+                    },
+                    onOpenAgent = { nav.push(Screen.Agent) },
+                )
+
+                is Screen.Archive -> ArchiveScreen(
+                    key = s.key,
+                    onBack = { nav.pop() },
+                    onOpenEntity = { type, id -> nav.push(Screen.EntityDetail(type, id)) },
+                )
+
+                is Screen.EntityDetail -> EntityDetailScreen(
+                    type = s.type,
+                    id = s.id,
+                    onBack = { nav.pop() },
+                )
 
                 is Screen.QuestDetail -> QuestDetailScreen(
                     questId = s.id,
@@ -222,6 +261,11 @@ private fun MainScaffold() {
                     bladeId = s.id,
                     onBack = { nav.pop() },
                     onOpenPlan = { nav.push(Screen.PlanDetail(it)) },
+                )
+
+                is Screen.EnemyDetail -> EnemyDetailScreen(
+                    enemyId = s.id,
+                    onBack = { nav.pop() },
                 )
 
                 is Screen.MapDetail -> MapDetailScreen(
@@ -239,5 +283,25 @@ private fun MainScaffold() {
                 )
             }
         }
+    }
+}
+
+private fun openHit(nav: Navigator, hit: SearchHit) {
+    Prefs.pushRecent(
+        when (hit.type) {
+            "blade" -> "blades"
+            "quest" -> "quests"
+            "enemy" -> "monsters"
+            "item" -> "items"
+            "location" -> "location"
+            else -> "items"
+        },
+    )
+    when (hit.type) {
+        "quest" -> nav.push(Screen.QuestDetail(hit.id))
+        "blade" -> nav.push(Screen.BladeDetail(hit.id, hit.title))
+        "enemy" -> nav.push(Screen.EnemyDetail(hit.id))
+        "location" -> nav.push(Screen.EntityDetail("location", hit.id))
+        else -> nav.push(Screen.EntityDetail(hit.type, hit.id))
     }
 }

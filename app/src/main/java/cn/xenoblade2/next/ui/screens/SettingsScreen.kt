@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -51,6 +52,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.xenoblade2.next.agent.AgentSettings
 import cn.xenoblade2.next.data.Db
+import cn.xenoblade2.next.data.Prefs
+import cn.xenoblade2.next.data.ThemeMode
 import cn.xenoblade2.next.data.WikiRepo
 import cn.xenoblade2.next.plan.PlanStore
 import cn.xenoblade2.next.ui.components.ActionRow
@@ -58,6 +61,8 @@ import cn.xenoblade2.next.ui.components.KeyValue
 import cn.xenoblade2.next.ui.components.ScreenHeader
 import cn.xenoblade2.next.ui.components.SectionCard
 import cn.xenoblade2.next.ui.components.Tag
+import cn.xenoblade2.next.ui.nav.HOME_ENTRY_BY_KEY
+import cn.xenoblade2.next.ui.nav.TAB_OPTION_KEYS
 import cn.xenoblade2.next.ui.theme.Palette
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -71,7 +76,7 @@ private data class DbStats(
 )
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onOpenAgent: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val settings = remember { AgentSettings(context) }
@@ -127,6 +132,100 @@ fun SettingsScreen(onBack: () -> Unit) {
                 .padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            SectionCard(title = "外观") {
+                Text("暗色模式", color = Palette.Text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ThemeMode.entries.forEach { mode ->
+                        ThemeChip(mode.label, Prefs.themeMode == mode) { Prefs.applyThemeMode(mode) }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "跟随系统时随设备深浅色切换；选亮色 / 暗色会覆盖系统设置。",
+                    color = Palette.TextDim,
+                    fontSize = 11.sp,
+                )
+            }
+
+            SectionCard(
+                title = "底部 Tab 页设置",
+                trailing = {
+                    Text("${Prefs.tabKeys.size}/${Prefs.MAX_OPTIONAL_TABS}", color = Palette.TextDim, fontSize = 11.sp)
+                },
+            ) {
+                Text(
+                    "首页和设置固定显示；可选功能最多 3 项。调整后会立即应用并保留。",
+                    color = Palette.TextDim,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                TAB_OPTION_KEYS.forEach { key ->
+                    val entry = HOME_ENTRY_BY_KEY[key] ?: return@forEach
+                    val index = Prefs.tabKeys.indexOf(key)
+                    val selected = index >= 0
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(9.dp))
+                            .clickable { Prefs.toggleTab(key) }
+                            .padding(vertical = 7.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // 序号圆点代替勾选框：选中即「第几个 Tab」，比打勾更直观，也不会歪。
+                        Box(
+                            Modifier
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(if (selected) Palette.Core else Color.Transparent)
+                                .border(
+                                    1.dp,
+                                    if (selected) Palette.Core else Palette.CardBorder,
+                                    CircleShape,
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                if (selected) "${index + 1}" else "",
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text(entry.title, color = if (selected) Palette.Text else Palette.TextDim, fontSize = 13.sp)
+                        Spacer(Modifier.weight(1f))
+                        if (selected) {
+                            Text(
+                                "↑",
+                                color = if (index > 0) Palette.TextDim else Palette.TextDim.copy(alpha = 0.3f),
+                                fontSize = 15.sp,
+                                modifier = Modifier
+                                    .clickable(enabled = index > 0) { Prefs.moveTab(key, -1) }
+                                    .padding(horizontal = 8.dp),
+                            )
+                            Text(
+                                "↓",
+                                color = if (index < Prefs.tabKeys.lastIndex) Palette.TextDim
+                                else Palette.TextDim.copy(alpha = 0.3f),
+                                fontSize = 15.sp,
+                                modifier = Modifier
+                                    .clickable(enabled = index < Prefs.tabKeys.lastIndex) { Prefs.moveTab(key, 1) }
+                                    .padding(horizontal = 8.dp),
+                            )
+                        } else {
+                            Text(
+                                "加入",
+                                color = Palette.Core.copy(alpha = 0.7f),
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                            )
+                        }
+                    }
+                }
+            }
+
             SectionCard(
                 title = "Agent 模型",
                 trailing = {
@@ -141,7 +240,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
                 Spacer(Modifier.height(10.dp))
 
-                FieldLabel("Base URL")
+                FieldLabel("接口地址")
                 InputField(
                     value = baseUrl,
                     onValueChange = { baseUrl = it; saved = false },
@@ -150,7 +249,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
                 Spacer(Modifier.height(8.dp))
 
-                FieldLabel("API Key")
+                FieldLabel("密钥")
                 InputField(
                     value = apiKey,
                     onValueChange = { apiKey = it; saved = false },
@@ -248,6 +347,17 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text("只删 plans.db 里的计划与勾选进度，不动 Wiki 数据。", color = Palette.TextDim, fontSize = 11.sp)
             }
 
+            SectionCard(title = "助手（测试）") {
+                Text(
+                    "大模型规划、路线与开环助手仍在开发中，入口先放在设置里方便试用。",
+                    color = Palette.TextDim,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                ActionRow("打开助手") { onOpenAgent() }
+            }
+
             SectionCard(title = "关于与授权") {
                 Text(
                     "本应用是社区复刻：界面与数据结构参考 Gitee「xenoblade2-wiki」1.2.2（MPL-2.0），" +
@@ -314,7 +424,7 @@ private fun InputField(
             .padding(top = 4.dp)
             .clip(RoundedCornerShape(9.dp))
             .background(Palette.SurfaceHigh)
-            .border(1.dp, Color(0xFF26313F), RoundedCornerShape(9.dp))
+            .border(1.dp, Palette.CardBorder, RoundedCornerShape(9.dp))
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -337,5 +447,24 @@ private fun InputField(
             Spacer(Modifier.width(4.dp))
             trailing()
         }
+    }
+}
+
+@Composable
+private fun ThemeChip(label: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (active) Palette.Core.copy(alpha = 0.2f) else Palette.SurfaceHigh)
+            .border(1.dp, if (active) Palette.Core else Palette.CardBorder, RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+    ) {
+        Text(
+            label,
+            color = if (active) Palette.Core else Palette.TextDim,
+            fontSize = 13.sp,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+        )
     }
 }

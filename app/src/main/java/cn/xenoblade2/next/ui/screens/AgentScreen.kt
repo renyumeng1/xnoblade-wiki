@@ -44,7 +44,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -268,7 +267,7 @@ private fun AssistantBubble(text: String) {
             Modifier
                 .clip(RoundedCornerShape(4.dp, 14.dp, 14.dp, 14.dp))
                 .background(Palette.Surface)
-                .border(1.dp, Color(0xFF23303F), RoundedCornerShape(4.dp, 14.dp, 14.dp, 14.dp))
+                .border(1.dp, Palette.CardBorder, RoundedCornerShape(4.dp, 14.dp, 14.dp, 14.dp))
                 .padding(horizontal = 12.dp, vertical = 9.dp),
         ) {
             Text(markdownLite(text), color = Palette.Text, fontSize = 14.sp, lineHeight = 21.sp)
@@ -330,7 +329,7 @@ private fun QuickChip(text: String, enabled: Boolean, onClick: () -> Unit) {
         Modifier
             .clip(RoundedCornerShape(16.dp))
             .background(Palette.SurfaceHigh)
-            .border(1.dp, Color(0xFF26313F), RoundedCornerShape(16.dp))
+            .border(1.dp, Palette.CardBorder, RoundedCornerShape(16.dp))
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
@@ -355,7 +354,7 @@ private fun InputBar(
             .padding(horizontal = 12.dp)
             .clip(RoundedCornerShape(22.dp))
             .background(Palette.Surface)
-            .border(1.dp, Color(0xFF26313F), RoundedCornerShape(22.dp))
+            .border(1.dp, Palette.CardBorder, RoundedCornerShape(22.dp))
             .padding(start = 14.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
