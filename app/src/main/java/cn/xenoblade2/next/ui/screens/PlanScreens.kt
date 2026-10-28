@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cn.xenoblade2.next.data.Prefs
 import cn.xenoblade2.next.data.WikiRepo
 import cn.xenoblade2.next.plan.Plan
 import cn.xenoblade2.next.plan.PlanStep
@@ -166,12 +167,18 @@ fun PlanDetailScreen(planId: Long, onBack: () -> Unit, onOpenMap: (String) -> Un
     var steps by remember { mutableStateOf<List<PlanStep>>(emptyList()) }
     var hops by remember { mutableStateOf<Map<Long, StepHop>>(emptyMap()) }
     var version by remember { mutableStateOf(0) }
+    // 路线规划（Beta）关闭时不计算逐段方位。
+    val routeBeta = Prefs.routeBeta
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(planId, version) {
+    LaunchedEffect(planId, version, routeBeta) {
         val loaded = WikiRepo.io {
             val s = PlanStore.steps(planId)
-            Triple(PlanStore.plans().firstOrNull { it.id == planId }, s, RouteGuide.planHops(s))
+            Triple(
+                PlanStore.plans().firstOrNull { it.id == planId },
+                s,
+                if (routeBeta) RouteGuide.planHops(s) else emptyMap(),
+            )
         }
         plan = loaded.first
         steps = loaded.second

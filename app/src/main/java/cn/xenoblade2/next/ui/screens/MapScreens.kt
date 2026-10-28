@@ -597,6 +597,8 @@ fun MapDetailScreen(
     var guideLegs by remember(mapId, planId) { mutableStateOf<List<RouteLeg>>(emptyList()) }
     var legIndex by remember(mapId, planId) { mutableIntStateOf(0) }
     var showRoute by remember(mapId) { mutableStateOf(true) }
+    // 路线规划（Beta）：Prefs.routeBeta 是 SnapshotState，直接读即可随开关重组。
+    val routeBeta = Prefs.routeBeta
     val viewState = rememberMapViewState()
     val scope = rememberCoroutineScope()
 
@@ -632,7 +634,7 @@ fun MapDetailScreen(
 
     // 计划地图的路线：以「最近的传送点/门（没有就用地标）」为起点，再串起本图所有已定位步骤。
     // 只有一个步骤也要画，否则用户不知道从哪个点开始走。
-    LaunchedEffect(mapId, planSteps, markers, map) {
+    LaunchedEffect(mapId, planSteps, markers, map, routeBeta) {
         // 坐标落在本图范围外的步骤画不上去（一个点都画不出来的图也没法连路线），先剔掉
         val info = map
         val pinned = planSteps
@@ -642,6 +644,13 @@ fun MapDetailScreen(
             }
             .sortedBy { it.ord }
         if (pinned.isEmpty()) {
+            route = null
+            guideLegs = emptyList()
+            legIndex = 0
+            return@LaunchedEffect
+        }
+        // Beta 关闭时不跑路网计算：只留计划点与点之间的连线。
+        if (!routeBeta) {
             route = null
             guideLegs = emptyList()
             legIndex = 0
@@ -910,12 +919,20 @@ fun MapDetailScreen(
                     bindStepId = null
                     pendingPin = fx to fy
                 },
-                routePath = if (showRoute) route?.points?.map { it.fx to it.fy } ?: emptyList() else emptyList(),
-                highlightPath = if (showRoute) guideLegs.getOrNull(legIndex)?.path ?: emptyList() else emptyList(),
+                routePath = if (routeBeta && showRoute) {
+                    route?.points?.map { it.fx to it.fy } ?: emptyList()
+                } else {
+                    emptyList()
+                },
+                highlightPath = if (routeBeta && showRoute) {
+                    guideLegs.getOrNull(legIndex)?.path ?: emptyList()
+                } else {
+                    emptyList()
+                },
             )
 
-            // 路线估算开关 + 逐段导航
-            route?.let { r ->
+            // 路线估算开关 + 逐段导航（Beta，默认关闭）
+            if (routeBeta) route?.let { r ->
                 Column(
                     Modifier.align(Alignment.TopStart).padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -1008,7 +1025,7 @@ fun MapDetailScreen(
         }
 
         // 逐段导航放到地图下方：放在图上会盖住一大块路线。
-        if (showRoute) {
+        if (routeBeta && showRoute) {
             guideLegs.getOrNull(legIndex)?.let { leg ->
                 GuidanceBar(
                     leg = leg,

@@ -54,7 +54,8 @@ agent/
 - `Gazetteer.matchEnemyFamily()` 从「…以外的甲狼兽族」切出「甲狼兽」；
 - 敌人刷新点只接受需求地区内的点，跨地区的写进 detail 提示，不钉点；
 - 纯战斗/计数需求补「怎么刷」提示（26 条模板）；
-- 最后用 `clusterByMap` 把同图步骤按最近邻重排，减少来回跑图。
+- 最后用 `Planner.orderForWalking` 把同图步骤按最近邻重排（组序 = 该图首次出现的位置，
+  起点承接上一组终点），画不上图的步骤按原顺序排在末尾，减少来回跑图。
 
 ## 逐段导航（RouteGuide）
 
@@ -71,6 +72,14 @@ agent/
   两点距离 < 1 视为同一位置（任务常把「问 A」和「回 A 交任务」拆成两步）。
 
 方位与距离都基于点位图平面坐标，UI 固定标注「点位图估算，非真实路网」。
+
+整套逐段导航收在设置页的「路线规划（Beta）」开关后面（`Prefs.routeBeta`，默认关闭）：
+
+- 关闭时地图页不跑 `RouteGraph`（`MapScreens` 的 `LaunchedEffect` 直接置空），
+  不渲染「路线估算」胶囊、`GuidanceBar`、`routePath` / `highlightPath`；
+  计划页也不算 `RouteGuide.planHops`，步骤行没有「路线：…」。
+- 计划点之间的青色连线来自 `MapCanvas` 的 `overlay`，**不受**开关影响——那是默认体验的一部分。
+- `AgentTools` 的 `route` 工具仍直接调 `RouteGraph`，不受开关约束（模型显式请求才走）。
 
 ## Agent 的边界
 

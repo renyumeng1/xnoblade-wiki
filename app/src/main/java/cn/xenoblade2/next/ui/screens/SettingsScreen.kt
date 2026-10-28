@@ -30,6 +30,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -183,6 +185,34 @@ fun SettingsScreen(onBack: () -> Unit, onOpenAgent: () -> Unit = {}) {
                     color = Palette.TextDim,
                     fontSize = 11.sp,
                 )
+            }
+
+            SectionCard(title = "路线规划（Beta）") {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "实验功能：按已有路网点估算距离并给逐段方向，建议只作参考。",
+                            color = Palette.TextDim,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Switch(
+                        checked = Prefs.routeBeta,
+                        onCheckedChange = { Prefs.applyRouteBeta(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Palette.SurfaceHigh,
+                            checkedTrackColor = Palette.Core,
+                            uncheckedThumbColor = Palette.TextDim,
+                            uncheckedTrackColor = Palette.CardBorder,
+                            uncheckedBorderColor = Palette.CardBorder,
+                        ),
+                    )
+                }
             }
 
             SectionCard(

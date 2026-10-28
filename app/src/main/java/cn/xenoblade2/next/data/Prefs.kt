@@ -36,6 +36,7 @@ object Prefs {
     private const val KEY_MARKED = "marked_keys"
     private const val KEY_MAP_FILTERS = "map_filter_keys"
     private const val KEY_MAP_SHOWS_MARKED = "map_shows_marked"
+    private const val KEY_ROUTE_BETA = "route_beta"
 
     /** 原版固定「首页 + 设置」，中间最多 3 个可选入口。 */
     const val MAX_OPTIONAL_TABS = 3
@@ -64,6 +65,10 @@ object Prefs {
     var mapShowsMarked by mutableStateOf(true)
         private set
 
+    /** 路线规划（Beta）：逐段导航 / 路线估算，默认关闭，只作方向参考。 */
+    var routeBeta by mutableStateOf(false)
+        private set
+
     fun init(context: Context) {
         if (sp != null) return
         val p = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -86,6 +91,7 @@ object Prefs {
             ?.filter { it.isNotBlank() }
             ?.toSet()
         mapShowsMarked = p.getBoolean(KEY_MAP_SHOWS_MARKED, true)
+        routeBeta = p.getBoolean(KEY_ROUTE_BETA, false)
     }
 
     fun applyMapFilters(keys: Set<String>) {
@@ -96,6 +102,11 @@ object Prefs {
     fun applyMapShowsMarked(value: Boolean) {
         mapShowsMarked = value
         sp?.edit()?.putBoolean(KEY_MAP_SHOWS_MARKED, value)?.apply()
+    }
+
+    fun applyRouteBeta(value: Boolean) {
+        routeBeta = value
+        sp?.edit()?.putBoolean(KEY_ROUTE_BETA, value)?.apply()
     }
 
     /** 地图点位等无数字 id 的收藏项，直接按字符串 key 存取。 */

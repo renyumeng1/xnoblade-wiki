@@ -90,6 +90,9 @@
 - [x] 路线规划：`RouteGraph` 用同图点位 kNN + `route_access_point` 电梯/传送点建图跑 Dijkstra，
       地图上叠加折线；`tools/route_stats.py` 采样 1,412 对，绕行比 p50 1.06 / p90 1.43，0 对不连通。
       仍然不是真实路网，UI 与 Agent 都标注「估算」。
+- [x] 逐段导航收进「路线规划（Beta）」开关（`Prefs.routeBeta`，默认关）：关闭时地图只画计划点 +
+      参考点位 + 点与点连线，不跑 `RouteGraph`、不算 `planHops`；生成的计划按 `mapId` 分组、
+      组内最近邻排序（`Planner.orderForWalking`），采集候选同分时按掉率降序。
 - [x] Agent 工具补 `collect_spots`、`route_between`（共 17 个）。
 - [x] `find_place` 支持「地区 + 的 + 地名」拆词匹配与区域名兜底（返回 `maps`，不带坐标）。
 - [x] 真实模型探针 `tools/llm_probe.py`：grok-4.7 实测 5/5（同图路线、采集、空结果、跨图、未收录物品）。

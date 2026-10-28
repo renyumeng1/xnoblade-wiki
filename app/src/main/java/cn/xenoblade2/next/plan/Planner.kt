@@ -4,6 +4,7 @@ import cn.xenoblade2.next.data.AffinityNode
 import cn.xenoblade2.next.data.BladeSummary
 import cn.xenoblade2.next.data.CollectCandidate
 import cn.xenoblade2.next.data.CollectLocation
+import cn.xenoblade2.next.data.MapMath
 import cn.xenoblade2.next.data.Marker
 import cn.xenoblade2.next.data.QuestDetail
 import cn.xenoblade2.next.data.QuestStep
@@ -229,7 +230,12 @@ object Planner {
             .toSet() + extraPlaceMaps)
         val scored = candidates
             .mapNotNull { scoreCollect(it, text, stepRegion, placeMaps, prevMapId) }
-            .sortedByDescending { it.score }
+            // 同分时按掉率高的排前面（只在同一处候选之间比，不跨图）。
+            // 原始 probability 有 0~1 与 0~100 两套口径（见 dropPercent），统一换算成百分比再比。
+            .sortedWith(
+                compareByDescending<ScoredCollect> { it.score }
+                    .thenByDescending { dropPercent(it.candidate.probability) },
+            )
         if (scored.isEmpty()) {
             return CollectResult(
                 null,
@@ -557,7 +563,7 @@ object Planner {
                 )
             }
         }
-        return clusterByMap(out)
+        return orderForWalking(out)
     }
 
     /** 地区主图：点位最多的那张，用于「只知道地区」时的图级落点。 */
@@ -596,33 +602,64 @@ object Planner {
 
     private fun farmTip(req: String): String? = farmTips.firstOrNull { req.contains(it.first) }?.second
 
-    /** 保持地图出现顺序，同图内按最近邻重排，减少来回跑图。 */
-    fun clusterByMap(steps: List<NewStep>): List<NewStep> {
-        val order = LinkedHashMap<String, MutableList<NewStep>>()
+    /**
+     * 拜访顺序：按地图分组（组的顺序 = 该图首次出现的位置），组内最近邻串点。
+     *
+     * - 起点沿用上一组的最后一个坐标；第一组没有上一组时，保留本组第一个点的位置。
+     * - 同坐标的点保持原有相对顺序：`minByOrNull` 遇到并列取先出现的那个。
+     * - 画不上图的步骤（`mapId` 为空、`fx/fy` 为空、或投影落在图外）不参与排序，按原顺序排在最后。
+     *
+     * 复杂度 O(n²)（地图元数据走 [WikiRepo.map] 的缓存，不额外查库），只在生成计划时算一次。
+     * 纯启发式，不承诺全局最优。
+     */
+    fun orderForWalking(steps: List<NewStep>): List<NewStep> {
+        val groups = LinkedHashMap<String, MutableList<NewStep>>()
+        val unlocated = ArrayList<NewStep>()
         for (s in steps) {
-            val key = s.mapId ?: "\u0000none"
-            order.getOrPut(key) { ArrayList() }.add(s)
-        }
-        val out = ArrayList<NewStep>(steps.size)
-        for ((key, group) in order) {
-            if (key == "\u0000none" || group.size < 3) {
-                out.addAll(group)
-                continue
+            val mapId = s.mapId
+            val fx = s.fx
+            val fy = s.fy
+            if (mapId != null && fx != null && fy != null && drawableOn(mapId, fx, fy)) {
+                groups.getOrPut(mapId) { ArrayList() }.add(s)
+            } else {
+                unlocated.add(s)
             }
+        }
+        if (groups.isEmpty()) return steps
+
+        val out = ArrayList<NewStep>(steps.size)
+        var cursorFx: Double? = null
+        var cursorFy: Double? = null
+        for (group in groups.values) {
             val remaining = group.toMutableList()
-            var cursor = remaining.removeAt(0)
-            out.add(cursor)
+            // 第一组从本组第一个点起步，保持它在新列表的第一位；之后各组承接上一组终点。
+            if (cursorFx == null || cursorFy == null) {
+                val first = remaining.removeAt(0)
+                out.add(first)
+                cursorFx = first.fx
+                cursorFy = first.fy
+            }
             while (remaining.isNotEmpty()) {
+                val cx = cursorFx ?: 0.0
+                val cy = cursorFy ?: 0.0
                 val next = remaining.minByOrNull { s ->
-                    val dx = (s.fx ?: 0.0) - (cursor.fx ?: 0.0)
-                    val dy = (s.fy ?: 0.0) - (cursor.fy ?: 0.0)
+                    val dx = (s.fx ?: 0.0) - cx
+                    val dy = (s.fy ?: 0.0) - cy
                     dx * dx + dy * dy
                 } ?: break
                 remaining.remove(next)
                 out.add(next)
-                cursor = next
+                cursorFx = next.fx
+                cursorFy = next.fy
             }
         }
+        out.addAll(unlocated)
         return out
+    }
+
+    /** 投影落在图外的坐标画不上图，和地图页的过滤口径保持一致；图查不到时无从判断，按有坐标处理。 */
+    private fun drawableOn(mapId: String, fx: Double, fy: Double): Boolean {
+        val info = WikiRepo.map(mapId) ?: return true
+        return MapMath.normalized(info, fx, fy) != null
     }
 }
