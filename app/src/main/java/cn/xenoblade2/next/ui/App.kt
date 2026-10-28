@@ -13,9 +13,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Assignment
 import androidx.compose.material.icons.rounded.GridView
-import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,6 +52,7 @@ import cn.xenoblade2.next.ui.screens.QuestCategoryScreen
 import cn.xenoblade2.next.ui.screens.QuestDetailScreen
 import cn.xenoblade2.next.ui.screens.QuestListScreen
 import cn.xenoblade2.next.ui.screens.SettingsScreen
+import cn.xenoblade2.next.ui.nav.HOME_ENTRY_BY_KEY
 import cn.xenoblade2.next.ui.theme.Palette
 import cn.xenoblade2.next.ui.theme.Xc2Theme
 import kotlinx.coroutines.Dispatchers
@@ -160,16 +159,16 @@ private fun MainScaffold() {
     val nav = remember { Navigator() }
     val current = nav.current
 
-    // 固定四项：图鉴 / 地图 / 记录 / 设置。图鉴里的自定义入口留在设置页，不再改底栏。
-    val tabs = remember {
-        listOf(
-            Tab(Screen.Home, "图鉴", Icons.Rounded.GridView),
-            Tab(Screen.MapList, "地图", Icons.Rounded.Map),
-            Tab(Screen.PlanList, "记录", Icons.AutoMirrored.Rounded.Assignment),
-            Tab(Screen.Settings, "设置", Icons.Rounded.Settings),
-        )
-    }
-    val topLevel = tabs.any { it.screen == current }
+    // 对齐原版：图鉴 / 设置固定，中间是最多 3 个可配入口（设置页「底部 Tab 页设置」）。
+    // 这里必须每次重组都读 Prefs.tabKeys（SnapshotState）；用 remember 缓存列表会读不到改动。
+    val tabs = buildList {
+        add(Tab(Screen.Home, "图鉴", Icons.Rounded.GridView))
+        Prefs.tabKeys.forEach { key ->
+            val entry = HOME_ENTRY_BY_KEY[key] ?: return@forEach
+            add(Tab(screenForEntry(key), entry.title, entry.icon))
+        }
+        add(Tab(Screen.Settings, "设置", Icons.Rounded.Settings))
+    }.distinctBy { it.screen }
 
     // 顶层 Tab 是「替换栈底」而不是入栈，直接按返回会退出 App。这里补一层：
     // 有栈就退栈，栈底不是首页就回首页。
@@ -240,7 +239,8 @@ private fun MainScaffold() {
 
                 is Screen.Archive -> ArchiveScreen(
                     key = s.key,
-                    onBack = { nav.pop() },
+                    // Archive 可能是底栏 Tab（替换栈底），此时退栈无效，回图鉴。
+                    onBack = { if (nav.stack.size > 1) nav.pop() else nav.switchTop(Screen.Home) },
                     onOpenEntity = { type, id -> nav.push(Screen.EntityDetail(type, id)) },
                 )
 

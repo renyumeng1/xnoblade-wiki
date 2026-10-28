@@ -1,5 +1,6 @@
 package cn.xenoblade2.next.ui.screens
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -40,10 +42,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -75,6 +80,34 @@ private data class DbStats(
     val steps: Int = 0,
 )
 
+private const val TAB_FULL_HINT = "已达到最多 3 项，先移除一个再添加"
+
+/** 序号圆点：用 Canvas 画，数字按第一行的实际范围居中，不受行高/基线留白影响。 */
+@Composable
+private fun TabIndexDot(index: Int) {
+    val measurer = rememberTextMeasurer()
+    // Core 在暗色主题下是浅青（#7DCCC6），白字只有约 1.8:1；用 onPrimary（亮色白字 / 暗色深青字）
+    // 才能在两套配色里都读得清，和 MaterialTheme 的 primary 对子保持一致。
+    val onCore = MaterialTheme.colorScheme.onPrimary
+    Canvas(Modifier.size(20.dp)) {
+        drawCircle(Palette.Core)
+        val layout = measurer.measure(
+            "${index + 1}",
+            TextStyle(color = onCore, fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+        )
+        // 布局高度包含行距，直接按 layout.size 居中会偏；用行 top/bottom 对齐圆心。
+        val lineTop = layout.getLineTop(0)
+        val lineHeight = layout.getLineBottom(0) - lineTop
+        drawText(
+            layout,
+            topLeft = Offset(
+                (size.width - layout.size.width) / 2f,
+                (size.height - lineHeight) / 2f - lineTop,
+            ),
+        )
+    }
+}
+
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onOpenAgent: () -> Unit = {}) {
     val context = LocalContext.current
@@ -90,6 +123,10 @@ fun SettingsScreen(onBack: () -> Unit, onOpenAgent: () -> Unit = {}) {
     var confirmClear by remember { mutableStateOf(false) }
     var planCount by remember { mutableStateOf(0) }
     var stats by remember { mutableStateOf(DbStats()) }
+    // 满额时点「添加」的那一项，提示就显示在它下面。
+    var tabHintKey by remember { mutableStateOf<String?>(null) }
+    // Prefs.tabKeys 是 SnapshotState（mutableStateOf），直接读即可随改动重组。
+    val tabs = Prefs.tabKeys
     // 从输入框状态推导，而不是读 SharedPreferences：否则清空配置后
     // ScreenHeader / Tag 所在的重启范围没有读到任何 MutableState，Compose 会跳过重组。
     val remoteEnabled = baseUrl.isNotBlank() && apiKey.isNotBlank()
@@ -151,76 +188,83 @@ fun SettingsScreen(onBack: () -> Unit, onOpenAgent: () -> Unit = {}) {
             SectionCard(
                 title = "底部 Tab 页设置",
                 trailing = {
-                    Text("${Prefs.tabKeys.size}/${Prefs.MAX_OPTIONAL_TABS}", color = Palette.TextDim, fontSize = 11.sp)
+                    Text("${tabs.size}/${Prefs.MAX_OPTIONAL_TABS}", color = Palette.TextDim, fontSize = 11.sp)
                 },
             ) {
                 Text(
-                    "首页和设置固定显示；可选功能最多 3 项。调整后会立即应用并保留。",
+                    "图鉴和设置固定显示，中间最多 3 个可选入口。改动后底栏立即生效，重启后仍在。",
                     color = Palette.TextDim,
                     fontSize = 12.sp,
                     lineHeight = 17.sp,
                 )
                 Spacer(Modifier.height(8.dp))
-                TAB_OPTION_KEYS.forEach { key ->
-                    val entry = HOME_ENTRY_BY_KEY[key] ?: return@forEach
-                    val index = Prefs.tabKeys.indexOf(key)
-                    val selected = index >= 0
+                // 已添加：带序号、可上下移动、可移除
+                Text("底部导航", color = Palette.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
+                if (tabs.isEmpty()) {
+                    Text("还没添加任何功能", color = Palette.TextDim, fontSize = 12.sp)
+                }
+                tabs.forEachIndexed { index, key ->
+                    val entry = HOME_ENTRY_BY_KEY[key] ?: return@forEachIndexed
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(9.dp))
-                            .clickable { Prefs.toggleTab(key) }
-                            .padding(vertical = 7.dp, horizontal = 4.dp),
+                            .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // 序号圆点代替勾选框：选中即「第几个 Tab」，比打勾更直观，也不会歪。
-                        Box(
-                            Modifier
-                                .size(20.dp)
-                                .clip(CircleShape)
-                                .background(if (selected) Palette.Core else Color.Transparent)
-                                .border(
-                                    1.dp,
-                                    if (selected) Palette.Core else Palette.CardBorder,
-                                    CircleShape,
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                if (selected) "${index + 1}" else "",
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
+                        TabIndexDot(index)
                         Spacer(Modifier.width(10.dp))
-                        Text(entry.title, color = if (selected) Palette.Text else Palette.TextDim, fontSize = 13.sp)
+                        Text(entry.title, color = Palette.Text, fontSize = 13.sp)
                         Spacer(Modifier.weight(1f))
-                        if (selected) {
-                            Text(
-                                "↑",
-                                color = if (index > 0) Palette.TextDim else Palette.TextDim.copy(alpha = 0.3f),
-                                fontSize = 15.sp,
-                                modifier = Modifier
-                                    .clickable(enabled = index > 0) { Prefs.moveTab(key, -1) }
-                                    .padding(horizontal = 8.dp),
+                        RowAction("上移", enabled = index > 0) {
+                            Prefs.moveTab(key, -1)
+                            tabHintKey = null
+                        }
+                        RowAction("下移", enabled = index < tabs.lastIndex) {
+                            Prefs.moveTab(key, 1)
+                            tabHintKey = null
+                        }
+                        RowAction("移除", color = Palette.Flame) {
+                            Prefs.toggleTab(key)
+                            tabHintKey = null
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Text("可添加功能", color = Palette.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
+                TAB_OPTION_KEYS.filterNot { it in tabs }.forEach { key ->
+                    val entry = HOME_ENTRY_BY_KEY[key] ?: return@forEach
+                    val full = tabs.size >= Prefs.MAX_OPTIONAL_TABS
+                    Column(Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier.size(20.dp).clip(CircleShape).border(1.dp, Palette.CardBorder, CircleShape),
                             )
-                            Text(
-                                "↓",
-                                color = if (index < Prefs.tabKeys.lastIndex) Palette.TextDim
-                                else Palette.TextDim.copy(alpha = 0.3f),
-                                fontSize = 15.sp,
-                                modifier = Modifier
-                                    .clickable(enabled = index < Prefs.tabKeys.lastIndex) { Prefs.moveTab(key, 1) }
-                                    .padding(horizontal = 8.dp),
-                            )
-                        } else {
-                            Text(
-                                "加入",
-                                color = Palette.Core.copy(alpha = 0.7f),
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(horizontal = 8.dp),
-                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(entry.title, color = Palette.TextDim, fontSize = 13.sp)
+                            Spacer(Modifier.weight(1f))
+                            RowAction(
+                                "添加",
+                                color = if (full) Palette.TextDim else Palette.Core,
+                            ) {
+                                if (full) {
+                                    tabHintKey = key
+                                } else {
+                                    Prefs.toggleTab(key)
+                                    tabHintKey = null
+                                }
+                            }
+                        }
+                        if (tabHintKey == key) {
+                            Text(TAB_FULL_HINT, color = Palette.Flame, fontSize = 11.sp)
+                            Spacer(Modifier.height(4.dp))
                         }
                     }
                 }
@@ -467,4 +511,23 @@ private fun ThemeChip(label: String, active: Boolean, onClick: () -> Unit) {
             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
         )
     }
+}
+
+/** 行内文字按钮：留给手指的点击区比文字本身大，禁用时只降透明度不隐藏。 */
+@Composable
+private fun RowAction(
+    label: String,
+    color: Color = Palette.TextDim,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Text(
+        label,
+        color = if (enabled) color else color.copy(alpha = 0.3f),
+        fontSize = 12.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    )
 }
