@@ -52,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -530,6 +531,9 @@ fun BladeDetailScreen(bladeId: Long, onBack: () -> Unit, onOpenPlan: (Long) -> U
     var creating by remember { mutableStateOf(false) }
     var tab by remember { mutableStateOf(0) }
     var marked by remember { mutableStateOf(false) }
+    // 选择态只在会话内保留：不入库，避免污染 affinity_progress（那张表只记已习得进度）。
+    // 用 bladeId 作 key：同一处组合位置换一把异刃时不要把上一把的 level id 带过来。
+    var picked by rememberSaveable(bladeId) { mutableStateOf(setOf<Long>()) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(bladeId) {
@@ -579,6 +583,8 @@ fun BladeDetailScreen(bladeId: Long, onBack: () -> Unit, onOpenPlan: (Long) -> U
 
                 1 -> {
                     item(key = "affinity-head") {
+                        // 可勾选的等级：没标「初始习得」、本地进度也没记满。
+                        val openLevels = nodes.flatMap { pickableLevels(it, progress) }
                         Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp)) {
                             SectionCard(title = "开环概览") {
                                 Text(
@@ -594,26 +600,47 @@ fun BladeDetailScreen(bladeId: Long, onBack: () -> Unit, onOpenPlan: (Long) -> U
                                     trackColor = Palette.CardBorder,
                                 )
                                 Spacer(Modifier.height(10.dp))
-                                ActionRow(
-                                    text = if (creating) "生成中…" else "生成开环计划",
-                                    onClick = {
-                                        if (creating) return@ActionRow
-                                        creating = true
-                                        scope.launch {
-                                            val id = WikiRepo.io {
-                                                val steps: List<NewStep> = Planner.buildBladePlan(b, nodes)
-                                                val planId = PlanStore.createPlan("开环 · ${b.name}", "blade", b.id.toString())
-                                                PlanStore.addSteps(planId, steps)
-                                                planId
-                                            }
-                                            creating = false
-                                            onOpenPlan(id)
-                                        }
+                                AffinityPickBar(
+                                    open = openLevels,
+                                    picked = picked,
+                                    onPickMany = { ids, select ->
+                                        picked = if (select) picked + ids else picked - ids.toSet()
                                     },
+                                    onClear = { picked = emptySet() },
                                 )
+                                Spacer(Modifier.height(10.dp))
+                                val chosen = picked.size
+                                if (chosen == 0) {
+                                    Text(
+                                        if (openLevels.isEmpty()) "圆环已全部习得" else "先选择要做的环",
+                                        color = Palette.TextDim,
+                                        fontSize = 13.sp,
+                                    )
+                                } else {
+                                    ActionRow(
+                                        text = if (creating) "生成中…" else "生成开环计划（已选 $chosen 级）",
+                                        onClick = {
+                                            if (creating) return@ActionRow
+                                            creating = true
+                                            val ids = picked
+                                            scope.launch {
+                                                val id = WikiRepo.io {
+                                                    val steps: List<NewStep> = Planner.buildBladePlan(b, nodes, levelIds = ids)
+                                                    val planId = PlanStore.createPlan("开环 · ${b.name}", "blade", b.id.toString())
+                                                    PlanStore.addSteps(planId, steps)
+                                                    planId
+                                                }
+                                                creating = false
+                                                picked = emptySet()
+                                                onOpenPlan(id)
+                                            }
+                                        },
+                                    )
+                                }
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    "计划会跳过「初始习得」；带地名/敌名/NPC 的需求自动钉点，只写地区的落到该地区主图，" +
+                                    "勾选节点或等级后再生成，只包含选中的部分；" +
+                                        "带地名/敌名/NPC 的需求自动钉点，只写地区的落到该地区主图，" +
                                         "纯战斗类需求补「怎么刷」提示；同图步骤按最近邻排序。",
                                     color = Palette.TextDim,
                                     fontSize = 11.sp,
@@ -630,8 +657,17 @@ fun BladeDetailScreen(bladeId: Long, onBack: () -> Unit, onOpenPlan: (Long) -> U
                                 NodeCard(
                                     node = node,
                                     progress = progress,
+                                    picked = picked,
+                                    onToggleLevel = { id ->
+                                        picked = if (id in picked) picked - id else picked + id
+                                    },
+                                    onToggleNode = { ids, select ->
+                                        picked = if (select) picked + ids else picked - ids.toSet()
+                                    },
                                     onProgress = { level, value ->
                                         progress = progress.toMutableMap().also { it[level.id] = value }
+                                        // 进度记满就不再算进计划范围，避免给已做完的环生成步骤。
+                                        if (affinityDone(level, value)) picked = picked - level.id
                                         scope.launch { WikiRepo.io { PlanStore.setAffinityProgress(level.id, value) } }
                                     },
                                 )
@@ -959,7 +995,16 @@ private fun MercenaryCard(mission: MercenaryMissionRow) {
 }
 
 @Composable
-private fun NodeCard(node: AffinityNode, progress: Map<Long, Int>, onProgress: (AffinityLevel, Int) -> Unit) {
+private fun NodeCard(
+    node: AffinityNode,
+    progress: Map<Long, Int>,
+    picked: Set<Long>,
+    onToggleLevel: (Long) -> Unit,
+    onToggleNode: (List<Long>, Boolean) -> Unit,
+    onProgress: (AffinityLevel, Int) -> Unit,
+) {
+    val open = pickableLevels(node, progress)
+    val allPicked = open.isNotEmpty() && open.all { it.id in picked }
     Column(
         Modifier
             .fillMaxWidth()
@@ -971,10 +1016,29 @@ private fun NodeCard(node: AffinityNode, progress: Map<Long, Int>, onProgress: (
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(node.name, color = Palette.Text, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
             Tag(categoryLabel(node.category), Palette.Aqua)
+            if (open.isNotEmpty()) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (allPicked) "移出" else "加入",
+                    color = if (allPicked) Palette.Flame else Palette.Core,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onToggleNode(open.map { it.id }, !allPicked) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         node.levels.forEach { level ->
-            LevelRow(level, progress[level.id] ?: 0) { onProgress(level, it) }
+            LevelRow(
+                level = level,
+                current = progress[level.id] ?: 0,
+                selected = level.id in picked,
+                onToggle = { onToggleLevel(level.id) },
+                onProgress = { onProgress(level, it) },
+            )
         }
     }
 }
@@ -987,15 +1051,45 @@ private fun categoryLabel(c: String) = when (c) {
     else -> c
 }
 
-@Composable
-private fun LevelRow(level: AffinityLevel, current: Int, onProgress: (Int) -> Unit) {
-    val target = Regex("""(\d+)\s*/\s*(\d+)""").find(level.requirement)?.groupValues?.get(2)?.toIntOrNull()
+/** 需求里写的次数目标：「0/6」的 6，或 achievement_count。没有目标返回 null。 */
+private fun affinityTarget(level: AffinityLevel): Int? =
+    Regex("""(\d+)\s*/\s*(\d+)""").find(level.requirement)?.groupValues?.get(2)?.toIntOrNull()
         ?: level.achievementCount.takeIf { it > 0 }
+
+/** 这条环算不算做完了：库里标了「初始习得」，或本地进度已达到需求次数。 */
+private fun affinityDone(level: AffinityLevel, current: Int): Boolean {
+    if (level.learned) return true
+    val target = affinityTarget(level) ?: return false
+    return current >= target
+}
+
+/**
+ * 能在圆环页勾进计划的等级。
+ *
+ * 节点级「加入」、等级行圆点、顶部「第 N 层」都走这一个判断，
+ * 否则会出现「加入」把已完成的行也选进去、但那一行根本没有圆点的情况。
+ */
+private fun pickableLevels(node: AffinityNode, progress: Map<Long, Int>): List<AffinityLevel> =
+    node.levels.filter { !affinityDone(it, progress[it.id] ?: 0) }
+
+@Composable
+private fun LevelRow(
+    level: AffinityLevel,
+    current: Int,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    onProgress: (Int) -> Unit,
+) {
+    val target = affinityTarget(level)
     val value = current.coerceAtMost(target ?: Int.MAX_VALUE)
-    val learned = level.learned || (target != null && value >= target)
+    val learned = affinityDone(level, current)
 
     Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!learned) {
+                PickDot(selected, onToggle)
+                Spacer(Modifier.width(8.dp))
+            }
             Text(
                 "Lv${level.level}",
                 color = if (learned) Palette.Done else Palette.TextDim,
@@ -1058,5 +1152,77 @@ private fun MiniButton(text: String, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(text, color = Palette.TextDim, fontSize = 12.sp)
+    }
+}
+
+/** 等级行左侧的选择圆点：选中填实心，未选只留边框。已习得等级不显示。 */
+@Composable
+private fun PickDot(selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(18.dp)
+            .clip(CircleShape)
+            .background(if (selected) Palette.Core else Color.Transparent)
+            .border(1.dp, if (selected) Palette.Core else Palette.CardBorder, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(Palette.Surface))
+        }
+    }
+}
+
+/**
+ * 圆环页顶部的快捷选择：按层批量勾选、全选未习得、清空。
+ * 「第 N 层」再点一次是取消该层，而不是叠加。
+ */
+@Composable
+private fun AffinityPickBar(
+    open: List<AffinityLevel>,
+    picked: Set<Long>,
+    onPickMany: (List<Long>, Boolean) -> Unit,
+    onClear: () -> Unit,
+) {
+    if (open.isEmpty()) return
+    val layers = open.map { it.level }.distinct().sorted()
+
+    Text(
+        "已选 ${picked.size} 级",
+        color = Palette.Text,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+    )
+    Spacer(Modifier.height(6.dp))
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(layers) { layer ->
+            val ids = open.filter { it.level == layer }.map { it.id }
+            val active = ids.isNotEmpty() && ids.all { it in picked }
+            PickChip("第 $layer 层", active) { onPickMany(ids, !active) }
+        }
+        item {
+            PickChip("全选未习得", open.all { it.id in picked }) { onPickMany(open.map { it.id }, true) }
+        }
+        item { PickChip("清空", false) { onClear() } }
+    }
+}
+
+@Composable
+private fun PickChip(label: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (active) Palette.Core.copy(alpha = 0.2f) else Palette.SurfaceHigh)
+            .border(1.dp, if (active) Palette.Core else Palette.CardBorder, RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Text(
+            label,
+            color = if (active) Palette.Core else Palette.TextDim,
+            fontSize = 12.sp,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+        )
     }
 }

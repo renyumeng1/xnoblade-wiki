@@ -459,11 +459,20 @@ object Planner {
      * 定位顺序：地点内链 > 同地区地名 > 全局地名 > NPC > 敌人（含「XX族」族名）> 采集品。
      * 只提到地区、定不到具体点的需求，退到该地区主图（图级定位，UI 标「仅到图」）。
      * 纯战斗/操作类需求没有地点可落，补一条「怎么刷」提示，避免计划只剩一句计数。
+     *
+     * @param levelIds 非空时只处理这些等级（用户在圆环页勾选的范围）；
+     *   为 null 时保持旧行为，处理全部等级。已习得等级仍受 [skipLearned] 控制。
      */
-    fun buildBladePlan(blade: BladeSummary, nodes: List<AffinityNode>, skipLearned: Boolean = true): List<NewStep> {
+    fun buildBladePlan(
+        blade: BladeSummary,
+        nodes: List<AffinityNode>,
+        skipLearned: Boolean = true,
+        levelIds: Set<Long>? = null,
+    ): List<NewStep> {
         val out = ArrayList<NewStep>()
         for (node in nodes) {
             for (lv in node.levels) {
+                if (levelIds != null && lv.id !in levelIds) continue
                 if (skipLearned && lv.learned) continue
                 if (lv.requirement.isBlank()) continue
                 val req = lv.requirement
