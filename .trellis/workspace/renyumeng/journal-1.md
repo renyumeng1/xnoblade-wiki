@@ -80,3 +80,39 @@
 - 本轮未编译、未安装、未截图（纯文档改动）。
 - `adb devices` 当前无设备：上一轮 `plans.db` 恢复（应 9 份计划）**仍未核对**。
 
+
+
+## Session 2: Git 基线整理与反编译资源排除
+
+**Date**: 2026-10-28
+**Task**: Git 基线整理与反编译资源排除
+**Branch**: `main`
+
+### Summary
+
+建立 3 个 commit 的仓库基线，把 APK 提取资源移出索引并重写历史
+
+### Main Changes
+
+- 新增根 .gitignore：排除 apk/、src/、构建产物、local.properties、签名、本地配置
+- xenoblade2.db / maps/ / item-icons/ 共 121 个文件取消跟踪（与 APK 内文件 sha256 一致）
+- 新增 tools/restore_assets.sh：从 apk/extracted 或 APK 还原资源并校验 sha256
+- git filter-branch 重写全部历史，本地仓库从 56 MB 降到 3.82 MiB
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] tools/restore_assets.sh --verify：sha256 通过、80 张地图 PNG、33 个图标
+- [OK] git rev-list --all 遍历：无任何历史树包含被排除资源
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 网络可用后执行 git push --force-with-lease origin main（当前 GitHub 仍是旧历史）
+- 如需彻底清除 GitHub 上的旧对象，最稳妥是删库重建或联系 GitHub Support
