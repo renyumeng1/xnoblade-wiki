@@ -15,6 +15,14 @@
 
 ## 构建
 
+数据库、地图与物品图标是从原版 APK 提取的资源，**不纳入 git**（版权与体积原因）。首次 clone 后先还原：
+
+```bash
+# 需要本地已有原版 APK：apk/xenoblade2Wiki-1.2.2.apk（或已解包的 apk/extracted/）
+tools/restore_assets.sh          # 复制到 app/src/main/assets/
+tools/restore_assets.sh --verify # 只校验 sha256 与文件数量
+```
+
 ```bash
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21   # 系统自带的 /usr/bin/java 是坏的
 export PATH="$JAVA_HOME/bin:$PATH"
@@ -78,10 +86,12 @@ app/src/main/java/cn/xenoblade2/next/
 ├─ plan/     PlanStore（plans.db）、Gazetteer（地名/敌人词典）、Planner
 ├─ agent/    AgentSettings、AgentTools、AgentEngine、OfflineAgent
 └─ ui/       App（手写导航栈）、screens、components（含 MapCanvas）
-app/src/main/assets/
-├─ xenoblade2.db   34 MB 只读库
-└─ maps/*.png      80 张 FrontierNav 地图
-tools/       check_sql.py、anchoring_stats.py、blade_anchoring.py、export_affine.py、route_stats.py、llm_probe.py
+app/src/main/assets/          ← 下列三项不纳入 git，用 tools/restore_assets.sh 还原
+├─ xenoblade2.db   34 MB 只读库（原版 APK 提取）
+├─ maps/           80 张地图 PNG + 7 个标记图层（原版 APK 提取）
+├─ item-icons/     33 个物品分类图标（原版 APK 提取）
+└─ blades/         52 张异刃立绘（非 APK 提取，随仓库提交）
+tools/       check_sql.py、anchoring_stats.py、blade_anchoring.py、export_affine.py、route_stats.py、llm_probe.py、restore_assets.sh
 ```
 
 ## 验证
@@ -169,7 +179,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ## 数据来源与授权
 
 - 地点、任务、异刃、地图数据来自 **FrontierNav**（社区项目）与 **Xeno Series Wiki / Fandom**，版权归原社区与 Monolith Soft 所有；本项目只做个人学习用途，不用于商业分发。
-- 原 Gitee 项目 `x4595605/xenoblade2-wiki` 未开源：本项目**不包含其源码或资源**，只参考了它的功能形态（任务攻略 / 地图点位 / 开环查询）后重新实现。反编译产物仅放在本地 `src/`、`apk/` 里做对照，未打包进 APK。
+- 原 Gitee 项目 `x4595605/xenoblade2-wiki` 未开源：本项目只参考其功能形态（任务攻略 / 地图点位 / 开环查询）后重新实现，反编译源码仅在本地 `src/`、`apk/` 做对照，**不进入 git、不打包**。
+- 从原版 APK 提取的数据库、地图、物品分类图标同样**不进入 git**（`.gitignore` 已排除），本地用 `tools/restore_assets.sh` 还原；仓库里只保留自己写的代码、文档与 `blades/` 立绘。
 - 未申请 `AD_ID`，未接入任何统计 SDK。
 
 ## 已知限制

@@ -25,6 +25,11 @@ local.properties
 /apk/
 /src/
 
+# ---- 从原版 APK 提取的资源：不入库，本地用 tools/restore_assets.sh 还原 ----
+/app/src/main/assets/xenoblade2.db
+/app/src/main/assets/maps/
+/app/src/main/assets/item-icons/
+
 # ---- 本地环境与编辑器 ----
 .idea/
 *.iml
