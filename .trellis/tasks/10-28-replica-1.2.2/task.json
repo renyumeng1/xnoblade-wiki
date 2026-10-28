@@ -1,0 +1,33 @@
+{
+  "id": "replica-1.2.2",
+  "name": "replica-1.2.2",
+  "title": "复刻原版 1.2.2 UI/功能 + 路线规划 + 开环 + Agent",
+  "description": "以原版 APK 1.2.2 为对照，补齐 UI/功能复刻；完成地图逐步规划、开环任务明确化、Agent 接入、图标补全、分层地图与地图标识",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "renyumeng",
+  "assignee": "renyumeng",
+  "createdAt": "2026-10-28",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-28-ui-parity",
+    "10-28-route-planning",
+    "10-28-affinity-clarity",
+    "10-28-agent-integration",
+    "10-28-icons-markers",
+    "10-28-layered-maps"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
