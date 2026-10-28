@@ -1,0 +1,53 @@
+# ---- Android / Gradle ----
+.gradle/
+.kotlin/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# 构建产物
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.jar.tmp
+
+# 签名与密钥
+*.jks
+*.keystore
+*.p12
+*.pem
+
+# ---- 反编译 / 对照产物（体积大，且不可随 APK 分发）----
+/apk/
+/src/
+
+# ---- 本地环境与编辑器 ----
+.idea/
+*.iml
+*.hprof
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- 日志与本地配置（可能含密钥）----
+*.log
+.env
+.env.*
+*.local.json
+*.local.toml
+
+# ---- Agent / 工具运行时 ----
+.agents/
+.claude/settings.local.json
+.codex/*.log
+.pi/*.log
+.trellis/.runtime/
+
+# ---- 数据库临时文件 ----
+*.db-journal
+*.db-wal
+*.db-shm
