@@ -114,5 +114,36 @@
 
 ### Next Steps
 
-- 网络可用后执行 git push --force-with-lease origin main（当前 GitHub 仍是旧历史）
+- ~~网络可用后执行 git push --force-with-lease origin main~~ → 已在 Session 3 完成
 - 如需彻底清除 GitHub 上的旧对象，最稳妥是删库重建或联系 GitHub Support
+
+---
+
+## Session 3: 经 7890 代理推送 GitHub
+
+**Date**: 2026-10-28
+**Task**: replica-1.2.2
+
+### Summary
+
+通过本地 `127.0.0.1:7890` 代理完成 force push，远端 `main` 已与本地一致（`e0d4f70`）；但 GitHub 仍保留旧 commit `e00e4e1` 及其 34.7 MB 数据库对象。
+
+### Main Changes
+
+- 先 `git fetch --prune origin` 把 remote-tracking 更新到真实远端 `e00e4e1`，否则 `--force-with-lease` 会因租约过期被拒
+- `git push --force-with-lease origin main`：`+ e00e4e1...e0d4f70 main -> main (forced update)`
+- 代理配置仅通过环境变量 `HTTPS_PROXY/HTTP_PROXY=http://127.0.0.1:7890` 传入，未写入 git config，避免污染全局
+
+### Git Commits
+
+(No new commits - 仅推送既有 e0d4f70)
+
+### Testing
+
+- [OK] `git ls-remote origin` → `e0d4f70` 与本地 `main` 一致
+- [OK] GitHub API 递归树（`/git/trees/e0d4f70?recursive=1`）：257 个 blob，无 >500KB 文件，assets 只剩 `blades/`
+- [FAIL] 旧 commit 仍可达：`/commits/e00e4e1` 返回 200，`contents/.../xenoblade2.db?ref=e00e4e1` 仍返回 34,713,600 字节
+
+### Status
+
+[OK] **Completed**（推送完成；旧对象清理未完成，需删库重建或联系 GitHub Support）
