@@ -140,25 +140,38 @@ object Gazetteer {
 
     /**
      * 步骤文本里的「可采集物品名」。
-     * 只收录真的能落到采集点的物品（collection_drop ⋈ collection_marker ⋈ marker），
-     * 否则匹配上也画不出点。按名字长度降序，先命中的是最长匹配。
+     *
+     * 候选来自整个 `collection_drop`，不要求已经有 FrontierNav marker —— 站点 Gmk
+     * 里还有 499 个点，之前那道 JOIN 会把这些点直接丢掉。按名字长度取最长匹配；
+     * 同样长的全部保留，由调用方把候选都列出来，不替用户猜。
      */
-    fun matchCollectItem(text: String): String? {
+    fun matchCollectItems(text: String): List<String> {
         ensureLoaded()
-        if (text.isBlank()) return null
+        if (text.isBlank()) return emptyList()
         val pool = collectItems ?: Db.list(
             """
-            SELECT DISTINCT d.item_name
-            FROM collection_drop d
-            JOIN collection_marker cm ON cm.collection_point_id = d.collection_point_id
-            JOIN frontiernav_map_marker f ON f.feature_id = cm.marker_id
-            WHERE LENGTH(d.item_name) >= 2
+            SELECT DISTINCT item_name FROM collection_drop
+            WHERE LENGTH(item_name) >= 2
             """.trimIndent(),
         ) { c -> c.str("item_name") }
             .sortedByDescending { it.length }
             .also { collectItems = it }
-        return pool.firstOrNull { text.contains(it) }
+
+        val hits = pool.filter { text.contains(it) }
+        if (hits.isEmpty()) {
+            // 任务正文偶尔直接写 `物品:xxx`，优先认这种显式写法。
+            val explicit = Regex("""物品[:：]([^|｜,，。;；\s\]】]+)""")
+                .findAll(text)
+                .map { it.groupValues[1].trim() }
+                .filter { name -> name.length >= 2 && pool.any { it == name } }
+                .toList()
+            if (explicit.isNotEmpty()) return explicit.distinct()
+        }
+        val longest = hits.maxOfOrNull { it.length } ?: return emptyList()
+        return hits.filter { it.length == longest }.distinct()
     }
+
+    fun matchCollectItem(text: String): String? = matchCollectItems(text).firstOrNull()
 
     /**
      * 步骤文本里的 NPC 名 → 该 NPC 的出现坐标。

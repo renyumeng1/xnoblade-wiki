@@ -2,9 +2,12 @@ package cn.xenoblade2.next.plan
 
 import cn.xenoblade2.next.data.AffinityNode
 import cn.xenoblade2.next.data.BladeSummary
+import cn.xenoblade2.next.data.CollectCandidate
+import cn.xenoblade2.next.data.CollectLocation
 import cn.xenoblade2.next.data.Marker
 import cn.xenoblade2.next.data.QuestDetail
 import cn.xenoblade2.next.data.QuestStep
+import cn.xenoblade2.next.data.WikiShots
 import cn.xenoblade2.next.data.WikiRepo
 
 /**
@@ -17,6 +20,9 @@ import cn.xenoblade2.next.data.WikiRepo
  */
 object Planner {
 
+    /** 游戏内部地图/图层名（ma07a_b_floor_01 之类），不该出现在用户可见文案里。 */
+    private val INTERNAL_NAME = Regex("^ma\\d.*")
+
     data class Anchored(
         val step: QuestStep,
         val pin: Marker?,
@@ -24,9 +30,21 @@ object Planner {
         val notes: List<String> = emptyList(),
         /** 只能定到图、定不到点时填地图 id（图级定位），UI 上单独标一档。 */
         val mapOnly: String? = null,
+        /** 采集点有多个候选时给用户点选；选中的结果由 PlanStore 记住。 */
+        val choices: List<PinChoice> = emptyList(),
     ) {
         /** 有坐标的精确落点。 */
         val pinned: Boolean get() = pin != null && !pin.mapId.isNullOrBlank()
+    }
+
+    data class PinChoice(
+        val label: String,
+        val score: Double,
+        val mapId: String?,
+        val marker: Marker?,
+        val itemNames: List<String>,
+    ) {
+        val selectable: Boolean get() = marker != null && !marker.mapId.isNullOrBlank()
     }
 
     fun regionsOf(detail: QuestDetail): List<String> =
@@ -37,8 +55,59 @@ object Planner {
     private fun markerOf(featureId: String?): Marker? =
         if (featureId.isNullOrBlank()) null else WikiRepo.marker(featureId)
 
+    /** 地图 id 只在数据层用，界面上统一显示「地区 · 区域」。 */
+    private fun mapLabel(mapId: String?): String {
+        if (mapId.isNullOrBlank()) return ""
+        val m = WikiRepo.map(mapId) ?: return "未知地图"
+        return listOf(m.region, m.area)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString(" · ")
+            .ifBlank { "未知地图" }
+    }
+
+    /** 采集点 → 站点截图文件名。marker 的 target_name 有时是「地区/技能」而不是编号。 */
+    private fun collectShot(m: Marker?): String? {
+        if (m?.targetType != "CollectionPoint") return null
+        return WikiShots.fileNameForCollection(m.targetName)
+            ?: WikiShots.fileNameForCollection(WikiRepo.collectionCodeOfFeature(m.featureId))
+    }
+
     /** 单步定位。 */
-    fun anchor(step: QuestStep, regionHint: String?, regions: List<String>): Anchored {
+    fun anchor(
+        step: QuestStep,
+        regionHint: String?,
+        regions: List<String>,
+        prevMapId: String? = null,
+        override: Marker? = null,
+    ): Anchored {
+        if (override != null) {
+            // 用户钉点只存了 feature_id；补一次库查询，拿回 target_type/target_name
+            // （采集点截图、地图图标都依赖它们）。
+            val full = markerOf(override.featureId) ?: override
+            return Anchored(
+                step,
+                full,
+                "手动钉点",
+                listOf("已按你的选择固定在 ${mapLabel(full.mapId)}"),
+            )
+        }
+        // 采集步骤先按「物品 → 采集点」打分。地点内链通常只是「在某某岛/某某区域」，
+        // 指不到具体采集点；先走内链会把整座岛当成落点，等于没规划。
+        if (step.kind.contains("Collect")) {
+            val linkMaps = step.links.mapNotNull { link ->
+                markerOf(link.placeFeatureId)?.mapId?.takeIf { it.isNotBlank() }
+            }.toSet()
+            val hit = collectTarget(
+                step.text,
+                regionHint ?: regions.firstOrNull(),
+                prevMapId,
+                linkMaps,
+            )
+            if (hit != null) {
+                return Anchored(step, hit.pin, hit.how, hit.notes, hit.mapOnly, hit.choices)
+            }
+        }
         // 1) 显式地点内链
         step.links.forEach { link ->
             val m = markerOf(link.placeFeatureId)
@@ -51,7 +120,7 @@ object Planner {
             val place = Gazetteer.matchPlaces(step.text, region, 1).firstOrNull()
             val m = markerOf(place?.featureId)
             if (m != null && !m.mapId.isNullOrBlank()) {
-                return Anchored(step, m, "地名匹配", listOf("地点：${place!!.name}（${m.mapId}）"))
+                return Anchored(step, m, "地名匹配", listOf("地点：${place!!.name}"))
             }
         }
         // 2b) 任务跨区域：quest_location 只记接取地（如「英维迪亚烈王国·冯斯麦姆港」），
@@ -59,7 +128,7 @@ object Planner {
         val globalPlace = Gazetteer.matchPlaces(step.text, null, 1).firstOrNull()
         val globalMarker = markerOf(globalPlace?.featureId)
         if (globalMarker != null && !globalMarker.mapId.isNullOrBlank()) {
-            return Anchored(step, globalMarker, "地名匹配", listOf("地点：${globalPlace!!.name}（${globalMarker.mapId}）"))
+            return Anchored(step, globalMarker, "地名匹配", listOf("地点：${globalPlace!!.name}"))
         }
         // 2.5) 对话/交付类步骤：NPC 名 → 该 NPC 的出现坐标
         //      `npc_game_appearance` 里只有 base game 的 NPC 带 game_map（黄金之国多为空），
@@ -99,37 +168,231 @@ object Planner {
                 return Anchored(step, null, "未定位", listOf("敌人：$enemy（无坐标）"))
             }
         }
-        // 4) 采集步骤：物品 → 采集点（collection_drop ⋈ collection_marker ⋈ marker）
-        if (step.kind.contains("Collect")) {
-            val hit = collectTarget(step.text, regionHint ?: regions.firstOrNull())
-            if (hit != null) {
-                return Anchored(
-                    step,
-                    hit.first,
-                    "采集点",
-                    listOf("采集品：${hit.second}", "采集点：${hit.first.targetName}"),
-                )
-            }
-            Gazetteer.matchCollection(step.text)?.let {
-                return Anchored(step, null, "未定位", listOf("采集品：$it"))
-            }
-        }
         return Anchored(step, null, "未定位")
     }
 
-    /** 采集品 → 采集点坐标；优先同地区，找不到再全局找。 */
-    private fun collectTarget(text: String, regionHint: String?): Pair<Marker, String>? {
-        val item = Gazetteer.matchCollectItem(text) ?: return null
-        val spots = WikiRepo.collectMarkers(item, regionHint, 8)
-            .ifEmpty { WikiRepo.collectMarkers(item, null, 8) }
-        val m = spots.firstOrNull() ?: return null
-        return m to item
+    private data class CollectResult(
+        val pin: Marker?,
+        val mapOnly: String?,
+        val notes: List<String>,
+        val how: String,
+        val choices: List<PinChoice> = emptyList(),
+    )
+
+    private data class ScoredCollect(
+        val candidate: CollectCandidate,
+        val score: Double,
+        val location: CollectLocation?,
+        val reasons: List<String>,
+    )
+
+    private fun normalizeRegion(s: String?): String =
+        s?.trim().orEmpty().replace("的", "").replace(" ", "").replace("　", "")
+
+    private fun regionMatches(a: String?, b: String?): Boolean {
+        if (a.isNullOrBlank() || b.isNullOrBlank()) return true
+        val x = normalizeRegion(a)
+        val y = normalizeRegion(b)
+        return x == y || x.contains(y) || y.contains(x)
     }
 
-    fun anchorQuest(detail: QuestDetail): List<Anchored> {
+    private fun dropPercent(p: Double): Double = if (p <= 1.0) p * 100.0 else p
+
+    /**
+     * 采集品 → 采集点。按设计文档 5.4 打分，不拿「第一条」当答案。
+     *
+     * 排除：地区与步骤不一致、站点投影落在 Mapinfo 外、没有 Mapinfo 的层。
+     * 加分：掉率 /10、地名同图 +40、场景技能一致 +25、和上一步同图 +15。
+     * 只有一个候选，或最高分 ≥40 且领先第二名 ≥25，才自动钉点；否则最多列 5 个候选。
+     */
+    private fun collectTarget(
+        text: String,
+        regionHint: String?,
+        prevMapId: String?,
+        extraPlaceMaps: Set<String> = emptySet(),
+    ): CollectResult? {
+        val items = Gazetteer.matchCollectItems(text)
+        if (items.isEmpty()) {
+            Gazetteer.matchCollection(text)?.let {
+                return CollectResult(null, null, listOf("采集品：$it（没有掉落映射）"), "未定位")
+            }
+            return null
+        }
+        val candidates = WikiRepo.collectCandidates(items)
+        val itemLabel = "采集品：${items.joinToString("、")}"
+        if (candidates.isEmpty()) {
+            return CollectResult(null, null, listOf(itemLabel, "库里没有这些物品的采集点"), "未定位")
+        }
+        val stepRegion = Gazetteer.matchRegion(text) ?: regionHint
+        val placeMaps = (Gazetteer.matchPlaces(text, stepRegion, 8)
+            .mapNotNull { it.mapId }
+            .toSet() + extraPlaceMaps)
+        val scored = candidates
+            .mapNotNull { scoreCollect(it, text, stepRegion, placeMaps, prevMapId) }
+            .sortedByDescending { it.score }
+        if (scored.isEmpty()) {
+            return CollectResult(
+                null,
+                null,
+                listOf(itemLabel, "候选采集点都不在步骤地区${stepRegion?.let { "（$it）" } ?: ""}"),
+                "采集点待选",
+            )
+        }
+
+        val top = scored.first()
+        val second = scored.getOrNull(1)
+        // 两个候选贴在一起（同一张图、坐标差不到 8）就是同一个采集点，不必再让人选。
+        fun sameSpot(a: CollectLocation?, b: CollectLocation?): Boolean {
+            if (a == null || b == null || a.mapId == null || a.mapId != b.mapId) return false
+            val ax = a.fx ?: return false
+            val ay = a.fy ?: return false
+            val bx = b.fx ?: return false
+            val by = b.fy ?: return false
+            val dx = ax - bx
+            val dy = ay - by
+            return dx * dx + dy * dy <= 8.0 * 8.0
+        }
+        val autoPin = scored.size == 1 ||
+            (top.score >= 40.0 && second == null) ||
+            (top.score >= 40.0 && second != null && top.score - second.score >= 25.0) ||
+            sameSpot(top.location, second?.location)
+        val notes = ArrayList<String>()
+        notes.add(itemLabel)
+        notes.addAll(top.reasons)
+
+        if (autoPin) {
+            val loc = top.location
+            val pin = loc?.takeIf { it.drawable }?.toMarker(top.candidate)
+            if (pin != null) {
+                notes.add("采集点：${describeLocation(loc)}")
+                return CollectResult(pin, null, notes, "采集点")
+            }
+            // 赢家只有站点底图坐标：不要退回去钉一个分数更低的点。
+            loc?.let {
+                notes.add("采集点：${describeLocation(it)}")
+                notes.add("这个点只有站点底图坐标，当前 FrontierNav 底图上不画")
+            }
+            return CollectResult(null, loc?.mapId, notes, "采集点待选")
+        }
+
+        // 候选明细交给任务页的选择器（choices），计划里只留一句人话来。
+        notes.add("有 ${scored.size} 个候选采集点，暂未自动钉点")
+        top.location?.mapId?.let { id ->
+            if (scored.count { it.location?.mapId == id } == scored.size) {
+                notes.add("候选都在同一张图，先落到这张图")
+            }
+        }
+        val choices = ArrayList<PinChoice>()
+        scored.take(5).forEachIndexed { i, s ->
+            val loc = s.location
+            choices.add(
+                PinChoice(
+                    label = describeLocation(loc),
+                    score = s.score,
+                    mapId = loc?.mapId,
+                    marker = loc?.takeIf { it.drawable }?.toMarker(s.candidate),
+                    itemNames = s.candidate.itemNames,
+                ),
+            )
+        }
+        return CollectResult(null, top.location?.mapId, notes, "采集点待选", choices)
+    }
+
+    private fun scoreCollect(
+        candidate: CollectCandidate,
+        text: String,
+        stepRegion: String?,
+        placeMaps: Set<String>,
+        prevMapId: String?,
+    ): ScoredCollect? {
+        // 地区和步骤不一致的直接排除；地区和地图都没有时保留，交给后续候选列表。
+        if (!candidate.region.isNullOrBlank() && !stepRegion.isNullOrBlank() &&
+            !regionMatches(candidate.region, stepRegion)
+        ) {
+            return null
+        }
+        val valid = candidate.locations.filter { loc ->
+            // 站点点必须投在 Mapinfo 范围内；frontier 点不依赖站点投影。
+            loc.wikiArea == null || loc.inside
+        }
+        if (valid.isEmpty()) return null
+        if (candidate.region.isNullOrBlank() && !stepRegion.isNullOrBlank()) {
+            val known = valid.mapNotNull { it.region?.takeIf(String::isNotBlank) }
+            if (known.isNotEmpty() && known.none { regionMatches(it, stepRegion) }) return null
+        }
+
+        val pct = dropPercent(candidate.probability)
+        val base = (pct / 10.0).coerceIn(0.0, 10.0)
+        var bestLoc: CollectLocation? = null
+        var bestScore = Double.NEGATIVE_INFINITY
+        val reasons = ArrayList<String>()
+
+        for (loc in valid) {
+            var score = base
+            if (loc.mapId != null && loc.mapId in placeMaps) score += 40.0
+            if (!candidate.fieldSkill.isNullOrBlank() && text.contains(candidate.fieldSkill)) score += 25.0
+            if (loc.mapId != null && loc.mapId == prevMapId) score += 15.0
+            // 同分时优先能直接画出来的 frontier 点。
+            if (loc.drawable) score += 0.01
+            if (score > bestScore) {
+                bestScore = score
+                bestLoc = loc
+            }
+        }
+        bestLoc?.let { loc ->
+            if (loc.mapId != null && loc.mapId in placeMaps) {
+                reasons.add("步骤地名在 ${describeLocation(loc)}")
+            }
+            if (loc.mapId != null && loc.mapId == prevMapId) reasons.add("和上一步同一张图")
+        }
+        if (!candidate.fieldSkill.isNullOrBlank() && text.contains(candidate.fieldSkill)) {
+            reasons.add("场景技能对得上：${candidate.fieldSkill}")
+        }
+        reasons.add("掉率 ${"%.0f".format(pct)}%")
+        return ScoredCollect(candidate, bestScore, bestLoc, reasons.distinct())
+    }
+
+    private fun describeLocation(loc: CollectLocation?): String {
+        if (loc == null) return "位置未知"
+        val map = WikiRepo.map(loc.mapId)
+        val area = map?.let { "${it.region}·${it.area}" } ?: loc.mapGameName
+        // `ma07a_b_floor_01` 这类是游戏内部图层名，不往用户面前放。
+        val layer = loc.wikiArea?.takeIf { !area.contains(it) && !INTERNAL_NAME.matches(it) }
+        return listOfNotNull(area.takeIf { it.isNotBlank() }, layer).joinToString(" / ")
+    }
+
+    private fun CollectLocation.toMarker(candidate: CollectCandidate): Marker = Marker(
+        featureId = featureId ?: "",
+        mapId = mapId ?: "",
+        mapGameName = mapGameName,
+        frontierX = fx ?: 0.0,
+        frontierY = fy ?: 0.0,
+        worldX = null,
+        worldZ = null,
+        targetType = "CollectionPoint",
+        targetName = candidate.collectionCode,
+        targetId = "",
+    )
+
+    /** 任务页里显式写出的物品名（如有），用于补上步骤里没写物品的情况。 */
+    fun questCollectItems(detail: QuestDetail): List<String> {
+        val text = buildString {
+            append(detail.description)
+            detail.steps.forEach { append('\n').append(it.text).append('\n').append(it.detail) }
+        }
+        return Gazetteer.matchCollectItems(text)
+    }
+
+    fun anchorQuest(detail: QuestDetail, overrides: Map<Int, Marker> = emptyMap()): List<Anchored> {
         val regions = regionsOf(detail)
         val hint = regions.firstOrNull()
-        val raw = detail.steps.map { anchor(it, hint, regions) }
+        var prevMap: String? = null
+        val raw = detail.steps.map { step ->
+            val a = anchor(step, hint, regions, prevMap, overrides[step.position])
+            a.pin?.mapId?.takeIf { it.isNotBlank() }?.let { prevMap = it }
+                ?: a.mapOnly?.let { prevMap = it }
+            a
+        }
         // 图级兜底：同任务里多数已定位步骤落在哪张图，剩下没坐标的步骤至少指到那张图。
         // 只给地图 id、不给坐标，UI 标成「图级定位」，用户长按地图钉点就能补坐标。
         val mainMap = raw.mapNotNull { it.pin?.mapId?.takeIf { m -> m.isNotBlank() } }
@@ -138,41 +401,57 @@ object Planner {
             ?.key
             ?: return raw
         return raw.map { a ->
-            if (a.pin != null) a
-            else a.copy(
-                mapOnly = mainMap,
-                notes = a.notes + "所在图：${WikiRepo.map(mainMap)?.let { "${it.region}·${it.area}" } ?: mainMap}（估算，坐标待确认）",
-            )
+            // 已经有坐标、或者第 8 步这种「采集候选已经确定到哪张图」的，别再被主图覆盖。
+            if (a.pin != null || a.mapOnly != null) {
+                a
+            } else {
+                // 步骤里点名了别的地区（如「在檀佩兰提亚…」）就落到那个地区的主图，
+                // 不要被任务接取地所在的主图带偏。
+                val region = Gazetteer.matchRegion(a.step.text)
+                val fallback = region?.let { regionMainMap(it) } ?: mainMap
+                a.copy(
+                    mapOnly = fallback,
+                    notes = a.notes + "所在图：${WikiRepo.map(fallback)?.let { "${it.region}·${it.area}" } ?: fallback}（估算，坐标待确认）",
+                )
+            }
         }
     }
 
-    fun buildQuestPlan(detail: QuestDetail): List<NewStep> =
-        anchorQuest(detail).map { a ->
+    fun buildQuestPlan(detail: QuestDetail, overrides: Map<Int, Marker> = emptyMap()): List<NewStep> =
+        anchorQuest(detail, overrides).map { a ->
             val m = a.pin
             NewStep(
                 title = "第${a.step.position}步 · ${a.step.text}",
-                detail = buildString {
-                    if (a.step.detail.isNotBlank()) append(a.step.detail)
-                    if (a.notes.isNotEmpty()) {
-                        if (isNotEmpty()) append("\n")
-                        append(a.notes.joinToString("；"))
-                    }
-                    if (m != null && !m.mapId.isNullOrBlank()) {
-                        if (isNotEmpty()) append("\n")
-                        append("地图：${m.mapId} · ${m.targetName}")
-                    }
-                    if (a.step.links.isNotEmpty()) {
-                        if (isNotEmpty()) append("\n")
-                        append("关联：")
-                        append(a.step.links.joinToString("、") { "${it.kind}:${it.label}" })
-                    }
-                },
+                detail = stepDetail(a, m),
                 mapId = m?.mapId?.takeIf { it.isNotBlank() } ?: a.mapOnly,
                 fx = m?.frontierX,
                 fy = m?.frontierY,
                 featureId = m?.featureId,
+                shot = collectShot(m),
             )
         }
+
+    /**
+     * 组装步骤说明：wiki 原文 + 定位备注 + 地图 + 关联。
+     *
+     * 同一句话经常出现两次（wiki 正文里一条、定位备注里一条，或多条备注重复），
+     * 所以最后按行去重；备注里已经写了地图名时不再单列「地图：…」。
+     */
+    private fun stepDetail(a: Anchored, m: Marker?): String {
+        val lines = ArrayList<String>()
+        if (a.step.detail.isNotBlank()) lines.addAll(a.step.detail.lines())
+        lines.addAll(a.notes)
+        val mapText = m?.mapId?.takeIf { it.isNotBlank() }?.let { mapLabel(it) }
+        if (mapText != null && lines.none { it.contains(mapText) }) lines.add("地图：$mapText")
+        if (a.step.links.isNotEmpty()) {
+            lines.add("关联：" + a.step.links.map { it.label }.distinct().joinToString("、"))
+        }
+        val seen = HashSet<String>()
+        return lines.asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && seen.add(it) }
+            .joinToString("\n")
+    }
 
     /**
      * 开环计划：只列还没习得的等级需求，按「先易后难 + 同图聚集」排。
@@ -232,7 +511,7 @@ object Planner {
                     same?.let { e -> markerOf(e.featureId) }
                 }
                 val collectPin = if (linkPlace == null && placeMatch == null && npcPin == null && enemyPin == null) {
-                    collectTarget(req, regionHint)?.first
+                    collectTarget(req, regionHint, null)?.pin
                 } else null
                 val pin = linkPlace ?: placeMatch ?: npcPin ?: enemyPin ?: collectPin
                 val mapOnly = if (pin == null) regionHint?.let { regionMainMap(it) } else null
@@ -250,9 +529,9 @@ object Planner {
                                 val label =
                                     if (enemyName != null && pin === enemyPin) "${enemyName}的刷新点"
                                     else pin.targetName
-                                append("\n地图：${pin.mapId} · $label")
+                                append("\n地图：${mapLabel(pin.mapId)} · $label")
                             } else if (mapOnly != null) {
-                                append("\n地图：$mapOnly · $regionHint（只能到图，具体点位待确认）")
+                                append("\n地图：${mapLabel(mapOnly)}（只能到图，具体点位待确认）")
                             }
                             if (enemyElsewhere != null) {
                                 append("\n提示：这个敌人的刷新点实际在 $enemyElsewhere，与需求地区（$regionHint）不符，没直接钉点")
@@ -264,6 +543,7 @@ object Planner {
                         fx = pin?.frontierX,
                         fy = pin?.frontierY,
                         featureId = pin?.featureId,
+                        shot = collectShot(pin),
                     ),
                 )
             }

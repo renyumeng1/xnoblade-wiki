@@ -38,6 +38,13 @@ data class Marker(
     val targetType: String,
     val targetName: String,
     val targetId: String,
+    /**
+     * 二级类别：Location 的 `Landmark` / `Secret Area` / `Location (Location Category)`，
+     * 路径点的 `elevator` / `warp` / `jump`。原版地图筛选按它再分类。
+     */
+    val targetCategory: String = "",
+    /** 宝箱有出现条件时右上角画红色 `*`（原版 DefaultMapMarker 行为）。 */
+    val hasAppearanceCondition: Boolean = false,
 )
 
 data class QuestSummary(
@@ -49,6 +56,9 @@ data class QuestSummary(
     val chapter: String,
     val stepCount: Int,
     val isTorna: Boolean,
+    val location: String = "",
+    val condition: String = "",
+    val regions: List<String> = emptyList(),
 ) {
     val display: String get() = nameZh.ifBlank { title }
 }
@@ -106,6 +116,15 @@ data class BladeSummary(
     val weapon: String,
     val nodeCount: Int,
     val portrait: String,
+    val category: String = "",
+    val englishName: String = "",
+    val modifier: String = "",
+    val physicalDefense: Double = 0.0,
+    val etherDefense: Double = 0.0,
+    val strength: Double = 0.0,
+    val cooldown: Double = 0.0,
+    val auxSlots: Int = 0,
+    val unlockMethod: String = "",
 ) {
     val elementColor: Long
         get() = when {
@@ -119,6 +138,23 @@ data class BladeSummary(
             else -> 0xFF6FE3C4
         }
 }
+
+data class BladeSkillRow(
+    val id: Long,
+    val position: Int,
+    val category: String,
+    val name: String,
+    val description: String,
+    val effect: String,
+    val maxLevel: String,
+)
+
+data class MercenaryMissionRow(
+    val id: Long,
+    val title: String,
+    val conditions: List<String>,
+    val rewards: List<String>,
+)
 
 data class AffinityLevel(
     val id: Long,
@@ -163,4 +199,64 @@ data class EnemyAt(
     val featureId: String,
     val worldX: Double?,
     val worldZ: Double?,
+)
+
+data class EnemyRow(
+    val id: Long,
+    val name: String,
+    val levelMin: Int,
+    val levelMax: Int,
+    val region: String,
+    val category: String,
+    val isTorna: Boolean,
+)
+
+data class EnemyStatRow(
+    val position: Int,
+    val category: String,
+    val level: Int,
+    val region: String,
+    val hp: Long,
+    val exp: Int,
+    val wp: Int,
+    val sp: Int,
+)
+
+data class EnemyArtRow(
+    val position: Int,
+    val name: String,
+    val type: String,
+    val target: String,
+    val damage: Int,
+    val attribute: String,
+    val cooldown: Double,
+)
+
+data class EnemyDropRow(
+    val position: Int,
+    val itemTitle: String,
+    val probability: Double,
+    val firstNamed: Boolean,
+)
+
+data class EnemySpawnArea(
+    val mapId: String,
+    val mapName: String,
+    val areaName: String,
+    val x: Double,
+    val y: Double,
+    val z: Double,
+)
+
+data class EnemyDetailData(
+    val id: Long,
+    val name: String,
+    val nameEn: String,
+    val enemyCode: String,
+    val isTorna: Boolean,
+    val url: String,
+    val stats: List<EnemyStatRow>,
+    val arts: List<EnemyArtRow>,
+    val drops: List<EnemyDropRow>,
+    val spawns: List<EnemySpawnArea>,
 )

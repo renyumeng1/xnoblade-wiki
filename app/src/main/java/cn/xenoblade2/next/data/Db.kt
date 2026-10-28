@@ -15,8 +15,8 @@ object Db {
 
     private const val ASSET_DB = "xenoblade2.db"
 
-    /** 与 release.json 里 databaseVersion=20260921.1 对齐；换了 assets 就改这里。 */
-    private const val DB_VERSION = 2_026_0921L
+    /** 换了 assets 就改这里；20261028 加入了站点 Gmk 采集点投影。 */
+    private const val DB_VERSION = 2_026_1028L
 
     private var opened: SQLiteDatabase? = null
 

@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
+import cn.xenoblade2.next.data.Marker
 import cn.xenoblade2.next.data.dblOrNull
 import cn.xenoblade2.next.data.int
 import cn.xenoblade2.next.data.lng
@@ -34,6 +35,8 @@ data class PlanStep(
     val fx: Double?,
     val fy: Double?,
     val featureId: String?,
+    /** wiki 游戏内截图文件名（采集点等），为空表示没有参考图。 */
+    val shot: String? = null,
     val done: Boolean,
 ) {
     val pinned: Boolean get() = !mapId.isNullOrBlank() && fx != null && fy != null
@@ -46,6 +49,7 @@ data class NewStep(
     val fx: Double? = null,
     val fy: Double? = null,
     val featureId: String? = null,
+    val shot: String? = null,
 )
 
 /**
@@ -85,15 +89,33 @@ object PlanStore {
                 fx REAL,
                 fy REAL,
                 feature_id TEXT,
+                shot TEXT,
                 done INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
         )
+        if (!hasColumn(opened, "plan_step", "shot")) {
+            opened.execSQL("ALTER TABLE plan_step ADD COLUMN shot TEXT")
+        }
         opened.execSQL(
             """
             CREATE TABLE IF NOT EXISTS affinity_progress(
                 level_id INTEGER PRIMARY KEY,
                 current INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent(),
+        )
+        opened.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS pin_override(
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                step_position INTEGER NOT NULL,
+                map_id TEXT NOT NULL,
+                fx REAL NOT NULL,
+                fy REAL NOT NULL,
+                feature_id TEXT,
+                PRIMARY KEY(source_type, source_id, step_position)
             )
             """.trimIndent(),
         )
@@ -158,7 +180,7 @@ object PlanStore {
         val out = ArrayList<PlanStep>()
         database.rawQuery(
             """
-            SELECT id, plan_id, ord, title, detail, map_id, fx, fy, feature_id, done
+            SELECT id, plan_id, ord, title, detail, map_id, fx, fy, feature_id, shot, done
             FROM plan_step WHERE plan_id = ? ORDER BY ord, id
             """.trimIndent(),
             arrayOf(planId.toString()),
@@ -178,6 +200,7 @@ object PlanStore {
         fx = c.dblOrNull("fx"),
         fy = c.dblOrNull("fy"),
         featureId = c.strOrNull("feature_id"),
+        shot = c.strOrNull("shot"),
         done = c.int("done") == 1,
     )
 
@@ -196,10 +219,19 @@ object PlanStore {
             put("fx", step.fx)
             put("fy", step.fy)
             put("feature_id", step.featureId)
+            put("shot", step.shot)
             put("done", 0)
         }
         return database.insert("plan_step", null, cv)
     }
+
+    private fun hasColumn(db: SQLiteDatabase, table: String, column: String): Boolean =
+        db.rawQuery("PRAGMA table_info($table)", null).use { c ->
+            while (c.moveToNext()) {
+                if (c.getString(c.getColumnIndexOrThrow("name")) == column) return true
+            }
+            false
+        }
 
     /** 手动钉点：把某一步绑到地图坐标（用于自动定位失败的步骤）。 */
     @Synchronized
@@ -213,6 +245,59 @@ object PlanStore {
             },
             "id = ?",
             arrayOf(stepId.toString()),
+        )
+    }
+
+    // ---------- 自动定位的采集点候选：用户点选后记住，重算不覆盖 ----------
+
+    @Synchronized
+    fun pinOverrides(sourceType: String, sourceId: String): Map<Int, Marker> {
+        val out = HashMap<Int, Marker>()
+        database.rawQuery(
+            "SELECT step_position, map_id, fx, fy, feature_id FROM pin_override " +
+                "WHERE source_type = ? AND source_id = ?",
+            arrayOf(sourceType, sourceId),
+        ).use { c ->
+            while (c.moveToNext()) {
+                val mapId = c.str("map_id")
+                out[c.int("step_position")] = Marker(
+                    featureId = c.strOrNull("feature_id") ?: "",
+                    mapId = mapId,
+                    mapGameName = "",
+                    frontierX = c.dblOrNull("fx") ?: 0.0,
+                    frontierY = c.dblOrNull("fy") ?: 0.0,
+                    worldX = null,
+                    worldZ = null,
+                    targetType = "Manual",
+                    targetName = "手动钉点",
+                    targetId = "",
+                )
+            }
+        }
+        return out
+    }
+
+    @Synchronized
+    fun setPinOverride(sourceType: String, sourceId: String, stepPosition: Int, marker: Marker) {
+        val mapId = marker.mapId.takeIf { it.isNotBlank() } ?: return
+        database.execSQL(
+            """
+            INSERT INTO pin_override(source_type, source_id, step_position, map_id, fx, fy, feature_id)
+            VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(source_type, source_id, step_position) DO UPDATE SET
+                map_id = excluded.map_id, fx = excluded.fx, fy = excluded.fy,
+                feature_id = excluded.feature_id
+            """.trimIndent(),
+            arrayOf<Any?>(sourceType, sourceId, stepPosition, mapId, marker.frontierX, marker.frontierY, marker.featureId),
+        )
+    }
+
+    @Synchronized
+    fun clearPinOverride(sourceType: String, sourceId: String, stepPosition: Int) {
+        database.delete(
+            "pin_override",
+            "source_type = ? AND source_id = ? AND step_position = ?",
+            arrayOf(sourceType, sourceId, stepPosition.toString()),
         )
     }
 

@@ -56,3 +56,6 @@ Thumbs.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# ---- xenoblade2.cn 抓取缓存（CC BY-NC-SA 4.0，不入库）----
+/data/wiki-xenoblade2/
