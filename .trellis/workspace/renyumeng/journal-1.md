@@ -147,3 +147,24 @@
 ### Status
 
 [OK] **Completed**（推送完成；旧对象清理未完成，需删库重建或联系 GitHub Support）
+
+
+## Session 3: 底栏 Tab 设置、开环可选范围、路线 Beta 开关
+
+**Date**: 2026-10-29
+**Task**: 底栏 Tab 设置、开环可选范围、路线 Beta 开关
+**Branch**: `main`
+
+### Summary
+
+修底栏不跟随 Tab 设置（remember 缓存 SnapshotState + 写死 4 项），序号圆点改 Canvas 行框居中；开环计划改为按节点/等级勾选后生成；计划拜访顺序按地图分组最近邻，逐段导航收进默认关闭的「路线规划（Beta）」；新增 .trellis/spec/android 层规范。三个子任务已 archive，模拟器手测通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9249834` | (see git log) |
+
+### Status
+
+[OK] **Completed**
